@@ -39,7 +39,7 @@ signclip-lis-experiments/
 ### Local Install
 ```bash
 pip install -e .
-
+```
 
 ## Colab Setup w/ Konda
 ```
