@@ -1,14 +1,6 @@
 # SignCLIP Experiments
 
-Clean, standalone implementation of SignCLIP for sign language-text contrastive learning.
-
-## Features
-
-- No fairseq dependencies
-- Simple PyTorch training loops
-- Colab-ready with Konda
-- Pip installable
-- Pretrained model support
+Extracted from J22Medoly/fairseq
 
 ## Directory Structure
 ```
