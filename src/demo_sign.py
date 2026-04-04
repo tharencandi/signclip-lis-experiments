@@ -2,6 +2,14 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'    # Suppress TensorFlow C++ backend logs
 os.environ['GLOG_minloglevel'] = '3'          # Suppress GLOG messages from XLA/CUDA
 
+import sys
+from pathlib import Path
+
+# Add project root to path for signclip imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import warnings
 # warnings.filterwarnings("ignore")           # Suppress Python warnings
 
@@ -16,7 +24,6 @@ except ImportError:
     pass
 
 import argparse
-from pathlib import Path
 import torch
 import numpy as np
 from pose_format import Pose
