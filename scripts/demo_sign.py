@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 import numpy as np
 from pose_format import Pose
-from mmpt.models import MMPTModel
+from signclip.models import MMPTModel
 
 # import mediapipe as mp
 # mp_holistic = mp.solutions.holistic
