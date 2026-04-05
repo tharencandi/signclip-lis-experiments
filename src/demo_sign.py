@@ -173,7 +173,8 @@ def embed_pose(pose, model_name='default'):
 
     pose_frames_l = []
     for p in poses:
-        pose_frames = preprocess_pose(p)
+        # Truncate to MAX_FRAMES_DEFAULT (256) to match model config
+        pose_frames = preprocess_pose(p, max_frames=MAX_FRAMES_DEFAULT)
         pose_frames_l.append(pose_frames)
 
     # Batch padding

@@ -14,3 +14,5 @@ __all__ = [
     'score_pose_and_text',
     'score_pose_and_text_batch',
 ]
+
+__version__ = '0.1.0'
