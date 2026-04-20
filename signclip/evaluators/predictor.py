@@ -10,6 +10,7 @@ import torch
 import pickle
 import math
 from pathlib import Path
+from omegaconf import OmegaConf
 
 from tqdm import tqdm
 
@@ -132,10 +133,11 @@ class RetrievalPredictor(Predictor):
         model.eval()
         model = model.cuda()
 
+        split = OmegaConf.select(self.config.dataset, "split") or "unknown"
         if self.config.dataset.test_datasets:
-            dir_name = f"{self.config.dataset.test_datasets[0][0]}_{self.config.dataset.split}"
+            dir_name = f"{self.config.dataset.test_datasets[0][0]}_{split}"
         else:
-            dir_name = self.config.dataset.split
+            dir_name = split
         pred_dir = os.path.join(self.pred_dir, dir_name)
         Path(pred_dir).mkdir(parents=True, exist_ok=True)
 

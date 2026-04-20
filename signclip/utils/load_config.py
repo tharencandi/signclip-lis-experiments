@@ -13,16 +13,19 @@ def load_config(args=None, config_file=None, overwrite_fairseq=False):
         config_file = args.taskconfig
     config = recursive_config(config_file)
 
-    if config.dataset.subsampling is not None:
-        batch_size = config.fairseq.dataset.batch_size // config.dataset.subsampling
+    subsampling = OmegaConf.select(config.dataset, "subsampling")
+    if subsampling is not None:
+        batch_size = config.fairseq.dataset.batch_size // subsampling
         print(
             "adjusting batch_size to {} due to subsampling {}.".format(
-                batch_size, config.dataset.subsampling
+                batch_size, subsampling
             )
         )
         config.fairseq.dataset.batch_size = batch_size
 
-    is_test = config.dataset.train_for_test or (config.dataset.split is not None and config.dataset.split == "test")
+    train_for_test = OmegaConf.select(config.dataset, "train_for_test")
+    split = OmegaConf.select(config.dataset, "split")
+    is_test = train_for_test or (split is not None and split == "test")
     if not is_test:
         if (
             config.fairseq.checkpoint is None
@@ -55,8 +58,9 @@ def load_config(args=None, config_file=None, overwrite_fairseq=False):
 def recursive_config(config_path):
     """allows for stacking of configs in any depth."""
     config = OmegaConf.load(config_path)
-    if config.includes is not None:
-        includes = config.includes
+    # Use OmegaConf.select to safely check for includes key
+    includes = OmegaConf.select(config, "includes")
+    if includes is not None:
         config.pop("includes")
         base_config = recursive_config(includes)
         config = OmegaConf.merge(base_config, config)

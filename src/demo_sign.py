@@ -47,15 +47,12 @@ FACEMESH_CONTOURS_POINTS = [
 
 MAX_FRAMES_DEFAULT = 256  # Default truncate length, can be overridden
 
-# Model configurations (keep these unchanged)
+# Model configurations - use projects/retri/ like original
 model_configs = [
-    ("default", "signclip_v1_1/baseline_temporal"), # multilingual pretrained
-    ("asl_citizen", "signclip_asl/asl_citizen_finetune"), # fine-tuned on ASL Citizen
-    ("asl_finetune", "signclip_asl/asl_finetune"), # fine-tuned on three ASL datasets
-    ("suisse", "signclip_suisse/suisse_finetune"), # fine-tuned on Signsuisse
-    # below are config files for longer duration inference and absuluate checkpoint path
-    # ("default", "signclip_v1_1/baseline_temporal_inference"), # multilingual pretrained
-    # ("suisse", "signclip_suisse/suisse_finetune_inference"), # fine-tuned on Signsuisse
+    ("default", "signclip_v1_1/baseline_temporal"),
+    ("asl_citizen", "signclip_asl/asl_citizen_finetune"),
+    ("asl_finetune", "signclip_asl/asl_finetune"),
+    ("suisse", "signclip_suisse/suisse_finetune"),
 ]
 
 # Cache for models that have been lazily initialized.
@@ -83,7 +80,6 @@ def get_model(model_name):
     # Load the model, tokenizer, and aligner.
     model, tokenizer, aligner = MMPTModel.from_pretrained(
         f"projects/retri/{config_path}.yaml",
-        # f"/home/zifjia/fairseq/examples/MMPT/projects/retri/{config_path}.yaml",
         video_encoder=None,
     )
     model.eval()

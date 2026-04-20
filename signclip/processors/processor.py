@@ -87,12 +87,16 @@ class Aligner(object):
     """
     def __init__(self, config):
         """__init__ needs to be light weight for more workers/threads."""
-        self.split = config.split
+        from omegaconf import OmegaConf
+        self.split = OmegaConf.select(config, "split")
         self.max_video_len = config.max_video_len
         self.max_len = config.max_len
         from transformers import AutoTokenizer
+        use_fast = OmegaConf.select(config, "use_fast")
+        if use_fast is None:
+            use_fast = False
         tokenizer = AutoTokenizer.from_pretrained(
-            str(config.bert_name), use_fast=config.use_fast
+            str(config.bert_name), use_fast=use_fast
         )
         self.cls_token_id = tokenizer.cls_token_id
         self.sep_token_id = tokenizer.sep_token_id

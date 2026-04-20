@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 import torch
+from omegaconf import OmegaConf
 
 from .. import tasks
 from .. import models
@@ -22,9 +23,11 @@ class Task(object):
         determine whether to load a hard-coded task or config from a generic one.
         via if a task string is available in config.
         """
-        if config.task is not None:
+        # Use OmegaConf.select to safely check for task key
+        task = OmegaConf.select(config, "task")
+        if task is not None:
             # TODO (huxu): expand the search scope.
-            task_cls = getattr(tasks, config.task)
+            task_cls = getattr(tasks, task)
             return task_cls(config)
         else:
             return Task(config)
@@ -42,6 +45,12 @@ class Task(object):
     def build_dataset(self):
         """TODO (huxu): move processor breakdown to MMDataset."""
         """fill-in `self.train_data`, `self.val_data` and `self.test_data`."""
+        
+        # Initialize split field if it doesn't exist
+        if not OmegaConf.select(self.config.dataset, "split"):
+            OmegaConf.set_struct(self.config.dataset, False)
+            self.config.dataset.split = None
+            OmegaConf.set_struct(self.config.dataset, True)
 
         meta_processor_cls = getattr(
             processors, self.config.dataset.meta_processor)
@@ -52,7 +61,8 @@ class Task(object):
         aligner_cls = getattr(
             processors, self.config.dataset.aligner)
 
-        if self.config.dataset.train_path is not None:
+        train_path = OmegaConf.select(self.config.dataset, "train_path")
+        if train_path is not None:
             self.config.dataset.split = "train"
             # may be used by meta processor.
             # meta_processor controls different dataset.
@@ -66,7 +76,8 @@ class Task(object):
             print("train_len", len(self.train_data))
             output = self.train_data[0]
             self.train_data.print_example(output)
-        if self.config.dataset.val_path is not None:
+        val_path = OmegaConf.select(self.config.dataset, "val_path")
+        if val_path is not None:
             self.config.dataset.split = "valid"
             # may be used by meta processor.
             meta_processor = meta_processor_cls(self.config.dataset)
@@ -80,7 +91,8 @@ class Task(object):
             output = self.val_data[0]
             self.val_data.print_example(output)
 
-        if self.config.dataset.split == "test":
+        split = OmegaConf.select(self.config.dataset, "split")
+        if split == "test":
             # the following is run via lauching fairseq-validate.
             meta_processor = meta_processor_cls(self.config.dataset)
             video_processor = video_processor_cls(self.config.dataset)
