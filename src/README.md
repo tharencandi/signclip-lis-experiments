@@ -141,22 +141,15 @@ python src/few_shot.py \
     --use_categories
 ```
 
-## Verify Imports
-
-Test that all dependencies and imports work correctly:
-
-```bash
-python src/test_imports.py
-```
-
-This will verify:
-- `signclip` package is accessible
-- `pose_format`, `torch`, `numpy`, etc. are installed
-- All src modules can be imported
-
 ## Model Configuration
 
 SignCLIP requires a custom YAML config file that points to the downloaded model weights.
+
+**Available models:**
+- `default` - SignCLIP v1.1 baseline
+- `asl_citizen` - ASL Citizen finetuned
+- `asl_finetune` - ASL finetuned
+- `suisse` - Swiss Sign Language finetuned
 
 **Pre-configured for Colab:**
 The repo includes a Colab-ready config at [`configs/signclip_v1_1/baseline_temporal_colab.yaml`](../configs/signclip_v1_1/baseline_temporal_colab.yaml) with paths set for `/content/signclip-lis-experiments/`.
