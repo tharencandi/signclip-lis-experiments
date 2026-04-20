@@ -2,6 +2,14 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'    # Suppress TensorFlow C++ backend logs
 os.environ['GLOG_minloglevel'] = '3'          # Suppress GLOG messages from XLA/CUDA
 
+import sys
+from pathlib import Path
+
+# Add project root to path for signclip imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import warnings
 # warnings.filterwarnings("ignore")           # Suppress Python warnings
 
@@ -16,11 +24,10 @@ except ImportError:
     pass
 
 import argparse
-from pathlib import Path
 import torch
 import numpy as np
 from pose_format import Pose
-from mmpt.models import MMPTModel
+from signclip.models import MMPTModel
 
 # import mediapipe as mp
 # mp_holistic = mp.solutions.holistic
@@ -40,15 +47,12 @@ FACEMESH_CONTOURS_POINTS = [
 
 MAX_FRAMES_DEFAULT = 256  # Default truncate length, can be overridden
 
-# Model configurations (keep these unchanged)
+# Model configurations - use projects/retri/ like original
 model_configs = [
-    ("default", "signclip_v1_1/baseline_temporal"), # multilingual pretrained
-    ("asl_citizen", "signclip_asl/asl_citizen_finetune"), # fine-tuned on ASL Citizen
-    ("asl_finetune", "signclip_asl/asl_finetune"), # fine-tuned on three ASL datasets
-    ("suisse", "signclip_suisse/suisse_finetune"), # fine-tuned on Signsuisse
-    # below are config files for longer duration inference and absuluate checkpoint path
-    # ("default", "signclip_v1_1/baseline_temporal_inference"), # multilingual pretrained
-    # ("suisse", "signclip_suisse/suisse_finetune_inference"), # fine-tuned on Signsuisse
+    ("default", "signclip_v1_1/baseline_temporal"),
+    ("asl_citizen", "signclip_asl/asl_citizen_finetune"),
+    ("asl_finetune", "signclip_asl/asl_finetune"),
+    ("suisse", "signclip_suisse/suisse_finetune"),
 ]
 
 # Cache for models that have been lazily initialized.
@@ -76,7 +80,6 @@ def get_model(model_name):
     # Load the model, tokenizer, and aligner.
     model, tokenizer, aligner = MMPTModel.from_pretrained(
         f"projects/retri/{config_path}.yaml",
-        # f"/home/zifjia/fairseq/examples/MMPT/projects/retri/{config_path}.yaml",
         video_encoder=None,
     )
     model.eval()
@@ -166,7 +169,8 @@ def embed_pose(pose, model_name='default'):
 
     pose_frames_l = []
     for p in poses:
-        pose_frames = preprocess_pose(p)
+        # Truncate to MAX_FRAMES_DEFAULT (256) to match model config
+        pose_frames = preprocess_pose(p, max_frames=MAX_FRAMES_DEFAULT)
         pose_frames_l.append(pose_frames)
 
     # Batch padding

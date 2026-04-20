@@ -17,6 +17,7 @@
 
 
 import torch
+from omegaconf import OmegaConf
 
 from torch import nn
 
@@ -47,8 +48,11 @@ class MMPTModel(nn.Module):
             video_encoder.load_state_dict(
                 torch.load('pretrained_models/s3d_howto100m.pth'))
         from transformers import AutoTokenizer
+        use_fast = OmegaConf.select(config.dataset, "use_fast")
+        if use_fast is None:
+            use_fast = False
         tokenizer = AutoTokenizer.from_pretrained(
-            config.dataset.bert_name, use_fast=config.dataset.use_fast
+            config.dataset.bert_name, use_fast=use_fast
         )
         from ..processors import Aligner
         aligner = Aligner(config.dataset)
@@ -115,25 +119,28 @@ class MMFusion(nn.Module):
             config.dataset.bert_name)
         self.hidden_size = transformer_config.hidden_size
         self.is_train = False
-        if config.dataset.train_path is not None:
+        train_path = OmegaConf.select(config.dataset, "train_path")
+        if train_path is not None:
             self.is_train = True
         # 0 means no iso; 1-12 means iso up to that layer.
         self.num_hidden_layers = transformer_config.num_hidden_layers
         self.last_iso_layer = 0
-        if config.dataset.num_iso_layer is not None:
-            self.last_iso_layer = config.dataset.num_iso_layer - 1 + 1
+        num_iso_layer = OmegaConf.select(config.dataset, "num_iso_layer")
+        if num_iso_layer is not None:
+            self.last_iso_layer = num_iso_layer - 1 + 1
 
-        if config.model.mm_encoder_cls is not None:
-            mm_encoder_cls = getattr(transformermodel, config.model.mm_encoder_cls)
+        mm_encoder_cls_name = OmegaConf.select(config.model, "mm_encoder_cls")
+        if mm_encoder_cls_name is not None:
+            mm_encoder_cls = getattr(transformermodel, mm_encoder_cls_name)
             model_config = AutoConfig.from_pretrained(config.dataset.bert_name)
             model_config.max_video_len = config.dataset.max_video_len
             # TODO: a general way to add parameter for a model.
             model_config.use_seg_emb = config.model.use_seg_emb
             self.mm_encoder = mm_encoder_cls.from_pretrained(
                 config.dataset.bert_name, config=model_config)
-        elif config.model.video_encoder_cls is not None\
-                and config.model.text_encoder_cls is not None:
-            video_encoder_cls = getattr(transformermodel, config.model.video_encoder_cls)
+        elif OmegaConf.select(config.model, "video_encoder_cls") is not None\
+                and OmegaConf.select(config.model, "text_encoder_cls") is not None:
+            video_encoder_cls = getattr(transformermodel, OmegaConf.select(config.model, "video_encoder_cls"))
             model_config = AutoConfig.from_pretrained(config.dataset.bert_name)
             model_config.max_video_len = config.dataset.max_video_len
             # TODO: make each model a set of config class.
@@ -153,7 +160,7 @@ class MMFusion(nn.Module):
             self.video_encoder = video_encoder_cls.from_pretrained(
                 config.dataset.bert_name, config=model_config)
             # exact same NLP model from Huggingface.
-            text_encoder_cls = getattr(transformermodel, config.model.text_encoder_cls)
+            text_encoder_cls = getattr(transformermodel, OmegaConf.select(config.model, "text_encoder_cls"))
             self.text_encoder = text_encoder_cls.from_pretrained(
                 config.dataset.bert_name)
         else:
