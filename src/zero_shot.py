@@ -1,40 +1,40 @@
 """
 Zero-shot evaluation using precomputed embeddings for both poses and text labels.
 
-This script is faster than zero_shot.py because it loads precomputed embeddings
-instead of computing text embeddings on-the-fly. It works directly from embedding
-files without needing the original .pose files.
+This script loads precomputed pose embeddings and generates text embeddings on-the-fly
+using SignCLIP. It works directly from embedding files without needing the original
+.pose files.
 
 Usage:
     # A3LIS dataset with raw glosses (no template)
-    python src/zero_shot_precomputed.py \
+    python src/zero_shot.py \
         --pose_embeddings_dir dataset/embeddings/a3lis_normalised \
         --split test \
         --label_language english
     
     # A3LIS with language tag prompt (paper standard: "<en> <lis> {label}")
-    python src/zero_shot_precomputed.py \
+    python src/zero_shot.py \
         --pose_embeddings_dir dataset/embeddings/a3lis_normalised \
         --split test \
         --label_language english \
         --prompt_type en_lis
     
     # A3LIS with macro categories instead of micro labels
-    python src/zero_shot_precomputed.py \
+    python src/zero_shot.py \
         --pose_embeddings_dir dataset/embeddings/a3lis_normalised \
         --split test \
         --use_categories \
         --prompt_type en_lis
     
     # A3LIS with custom template
-    python src/zero_shot_precomputed.py \
+    python src/zero_shot.py \
         --pose_embeddings_dir dataset/embeddings/a3lis_normalised \
         --split test \
         --label_language italian \
         --text_template "Italian sign language: {}"
     
     # Legacy format with precomputed text embeddings
-    python src/zero_shot_precomputed.py \
+    python src/zero_shot.py \
         --pose_embeddings_dir dataset/embeddings/ \
         --text_embeddings dataset/embeddings/text_embeddings_default_en_lis_{}.npy \
         --text_metadata dataset/embeddings/text_metadata_default_en_lis_{}.json \
@@ -53,6 +53,7 @@ from pathlib import Path
 import numpy as np
 import statistics
 from tqdm import tqdm
+from datetime import datetime
 
 # Add project root to path for demo_sign import
 project_root = Path(__file__).parent.parent
@@ -238,7 +239,7 @@ def load_pose_embeddings_for_split(embedding_dir: Path, split: str = 'test', lab
     return embeddings_array, labels, filenames
 
 
-def evaluate_zero_shot_precomputed(
+def evaluate_zero_shot(
     pose_embeddings_dir: str,
     text_embeddings_path: str = None,
     text_metadata_path: str = None,
@@ -249,7 +250,8 @@ def evaluate_zero_shot_precomputed(
     prompt_type: str = None,
     legacy_format: bool = False,
     label_type: str = 'micro',
-    use_categories: bool = False
+    use_categories: bool = False,
+    output_dir: str = None
 ):
     """
     Perform zero-shot evaluation using precomputed embeddings.
@@ -439,7 +441,14 @@ def evaluate_zero_shot_precomputed(
             marker = "***" if pred == pose_labels[i] else "   "
             print(f"    {j}. {pred:<30} (sim: {score:.4f}) {marker}")
     
-    return {
+    # Infer dataset name from embeddings directory
+    dataset_name = 'unknown'
+    if 'a3lis' in pose_embeddings_dir.lower():
+        dataset_name = 'A3LIS'
+    elif 'signit' in pose_embeddings_dir.lower():
+        dataset_name = 'SignIT'
+    
+    results = {
         'recall@1': recall_1,
         'recall@5': recall_5,
         'recall@10': recall_10,
@@ -447,8 +456,33 @@ def evaluate_zero_shot_precomputed(
         'num_test': num_test,
         'num_classes': len(text_labels),
         'prompt_type': prompt_type if prompt_type else 'raw',
-        'text_template': text_template
+        'text_template': text_template,
+        'split': split,
+        'label_language': label_language,
+        'use_categories': use_categories,
+        'model_name': model_name,
+        'pose_embeddings_dir': pose_embeddings_dir,
+        'timestamp': datetime.now().isoformat()
     }
+    
+    # Save results to JSON if output_dir specified
+    if output_dir:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Create descriptive filename
+        prompt_str = prompt_type if prompt_type else 'custom' if text_template else 'raw'
+        label_str = 'categories' if use_categories else label_language
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}.json"
+        
+        results_file = output_path / filename
+        with open(results_file, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        
+        print(f"\nResults saved to {results_file}")
+    
+    return results
 
 
 def main():
@@ -458,18 +492,18 @@ def main():
         epilog="""
 Examples:
   # Raw glosses (no template)
-  python src/zero_shot_precomputed.py \\
+  python src/zero_shot.py \\
       --pose_embeddings_dir dataset/embeddings/a3lis_normalised \\
       --split test --label_language english
 
   # With language tag (paper standard)
-  python src/zero_shot_precomputed.py \\
+  python src/zero_shot.py \\
       --pose_embeddings_dir dataset/embeddings/a3lis_normalised \\
       --split test --label_language english \\
       --prompt_type en_lis
 
   # Custom template
-  python src/zero_shot_precomputed.py \\
+  python src/zero_shot.py \\
       --pose_embeddings_dir dataset/embeddings/a3lis_normalised \\
       --split test --label_language english \\
       --text_template "Italian sign language: {}"
@@ -507,10 +541,12 @@ Available prompt types:
     parser.add_argument('--label_type', type=str, default='micro',
                         choices=['micro', 'macro'],
                         help='Label granularity (legacy format only)')
+    parser.add_argument('--output_dir', type=str, default='runs/zero_shot',
+                        help='Output directory for results JSON (default: runs/zero_shot)')
     
     args = parser.parse_args()
     
-    evaluate_zero_shot_precomputed(
+    results = evaluate_zero_shot(
         pose_embeddings_dir=args.pose_embeddings_dir,
         text_embeddings_path=args.text_embeddings,
         text_metadata_path=args.text_metadata,
@@ -521,7 +557,8 @@ Available prompt types:
         prompt_type=args.prompt_type,
         legacy_format=args.legacy_format,
         label_type=args.label_type,
-        use_categories=args.use_categories
+        use_categories=args.use_categories,
+        output_dir=args.output_dir
     )
 
 

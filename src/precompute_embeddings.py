@@ -1,30 +1,30 @@
 """
-Precompute pose embeddings with optional SignCLIP-style normalization.
+Precompute pose embeddings with optional SignCLIP-style normalisation.
 
-Normalization steps (when --normalize is enabled):
-1. Shoulder-based normalization: D_shoulders = 1, mid-point = (0, 0)
+Normalisation steps (when --normalize is enabled):
+1. Shoulder-based normalisation: D_shoulders = 1, mid-point = (0, 0)
 2. E6: Remove redundant keypoints (keep body, hands, face)
-3. E6.2: Anonymization - subtract first frame, add mean pose (motion-relative)
+3. E6.2: Anonymisation - subtract first frame, add mean pose (motion-relative)
 
 Note: E6.1 distribution standardization requires global dataset statistics which we don't have.
-Per-sample normalization destroys discriminative features (accuracy drops from 50% to 20%).
+Per-sample normalisation destroys discriminative features (accuracy drops from 50% to 20%).
 
 Usage:
-    # A3LIS dataset WITH normalization
+    # A3LIS dataset WITH normalisation  
     python src/precompute_embeddings.py \
         --dataset_root dataset/A3LIS_dataset_poses \
         --output_dir dataset/embeddings/a3lis_normalised \
         --normalize \
         --model_name default
     
-    # A3LIS dataset WITHOUT normalization (raw embeddings)
-    python src/precompute_embeddings.py \
+    # A3LIS dataset WITHOUT normalisation (raw embeddings)
+    python src/precompute_normalised_embeddings.py \
         --dataset_root dataset/A3LIS_dataset_poses \
         --output_dir dataset/embeddings/a3lis_raw \
         --no-normalize \
         --model_name default
     
-    # Legacy mode with normalization
+    # Legacy mode with normalisation
     python src/precompute_normalised_embeddings.py \
         --pose_dir dataset/poses \
         --output_dir dataset/embeddings/normalised \
