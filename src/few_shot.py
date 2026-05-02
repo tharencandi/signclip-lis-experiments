@@ -43,11 +43,49 @@ from tqdm import tqdm
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
+from sklearn.base import BaseEstimator, ClassifierMixin
 
 # Add project root to path for signclip imports
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+
+
+class EnsembleClassifier(BaseEstimator, ClassifierMixin):
+    def __init__(self, models):
+        self.models = models
+    def fit(self, X, y):
+        for model in self.models:
+            model.fit(X, y)
+        self.classes_ = self.models[0].classes_ #same for all models
+        return self
+    def predict_majority(self, X):
+        predicted_classes_and_confidence = []
+        for model in self.models:
+            if hasattr(model, 'predict_proba'):
+                predicted_class = model.classes_[np.argmax(model.predict_proba(X), axis=1)] 
+                predicted_classes_and_confidence.append((predicted_class, model.predict_proba(X)))
+            else:
+                predicted_class = model.predict(X)
+                predicted_classes_and_confidence.append((predicted_class, 0.0))
+        # Majority vote (highest confidence if tie)
+        final_predictions = []
+        for i in range(len(X)):
+            votes = defaultdict(float)
+            for pred_class, conf in predicted_classes_and_confidence:
+                if conf is not None:
+                    votes[pred_class[i]] += np.max(conf[i])  # Add confidence score
+                else:
+                    votes[pred_class[i]] += 1  # Just count vote
+            # Get class with highest vote (and confidence as tiebreaker)
+            best_class = max(votes.items(), key=lambda x: (x[1], x[0]))[0]
+            final_predictions.append(best_class)
+      
+        return final_predictions
+
+    def predict(self, X):
+        
+        return self.predict_majority(X)
 
 
 def load_a3lis_embeddings(embedding_dir: Path, split: str, label_language: str = 'english', use_categories: bool = False):
@@ -109,7 +147,8 @@ def load_a3lis_embeddings(embedding_dir: Path, split: str, label_language: str =
     return embeddings_array, labels, filenames
 
 
-def load_all_embeddings_with_signers(embedding_dir: Path, label_language: str = 'english', use_categories: bool = False):
+def load_all_embeddings_with_signers(embedding_dir: Path, label_language: str = 'english', use_categories: bool = False,
+                                     exclude_splits: list = None):
     """
     Load ALL A3LIS embeddings (train + test) with signer information for LOSO.
     
@@ -117,6 +156,9 @@ def load_all_embeddings_with_signers(embedding_dir: Path, label_language: str = 
         embedding_dir: Directory containing .npy embedding files and metadata
         label_language: 'italian' or 'english' for label selection
         use_categories: If True, use macro categories instead of micro labels
+        exclude_splits: Optional list of split values to exclude (e.g. ['val', 'unknown']).
+                        Use this to prevent the val signer from appearing in any LOSO
+                        training fold, keeping evaluation signer-independent.
     
     Returns:
         Tuple of (embeddings_array, labels_list, signers_list, filenames_list)
@@ -134,6 +176,10 @@ def load_all_embeddings_with_signers(embedding_dir: Path, label_language: str = 
     filenames = []
     
     for item in tqdm(metadata['embeddings'], desc="Loading all embeddings"):
+        # Exclude items from specified splits (e.g. val, unknown)
+        if exclude_splits and item.get('split', 'unknown') in exclude_splits:
+            continue
+
         # Get label
         if use_categories:
             label = item.get('category', item['label_italian'])
@@ -166,7 +212,8 @@ def evaluate_few_shot(
     method: str = 'knn',
     label_language: str = 'english',
     seed: int = 42,
-    use_categories: bool = False
+    use_categories: bool = False,
+    train_split: str = 'train'
 ):
     """
     Perform few-shot evaluation using KNN or Linear Probe.
@@ -179,6 +226,9 @@ def evaluate_few_shot(
         label_language: 'italian' or 'english' for A3LIS labels
         seed: Random seed for reproducibility
         use_categories: Use macro categories instead of micro labels
+        train_split: 'train' (7 train signers only) or 'train_val' (adds val signer mrla).
+                     Use 'train_val' only when NOT comparing against the fine-tuned model,
+                     because fine-tuning used the val signer for checkpoint selection.
     """
     np.random.seed(seed)
     
@@ -188,11 +238,24 @@ def evaluate_few_shot(
     
     embedding_dir = Path(pose_embeddings_dir)
     
-    # Load train embeddings
-    print("Loading training set...")
-    train_embeddings, train_labels, train_files = load_a3lis_embeddings(
-        embedding_dir, 'train', label_language, use_categories
-    )
+    # Load train embeddings (optionally combined with val)
+    if train_split == 'train_val':
+        print("Loading training set (train + val signers)...")
+        train_emb_t, train_lab_t, train_files_t = load_a3lis_embeddings(
+            embedding_dir, 'train', label_language, use_categories
+        )
+        print("Loading val set (adding to training)...")
+        train_emb_v, train_lab_v, train_files_v = load_a3lis_embeddings(
+            embedding_dir, 'val', label_language, use_categories
+        )
+        train_embeddings = np.concatenate([train_emb_t, train_emb_v], axis=0)
+        train_labels = train_lab_t + train_lab_v
+        train_files = train_files_t + train_files_v
+    else:
+        print("Loading training set...")
+        train_embeddings, train_labels, train_files = load_a3lis_embeddings(
+            embedding_dir, 'train', label_language, use_categories
+        )
     
     # Load test embeddings
     print("\nLoading test set...")
@@ -415,6 +478,13 @@ def evaluate_single_fold(
     elif method == 'svm':
         clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
         clf.fit(train_embeddings_norm, train_labels)
+    elif method == "ensemble":
+        # Placeholder for ensemble method (to be implemented)
+        clf = EnsembleClassifier([
+            LogisticRegression(random_state=seed, max_iter=1000),
+            SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
+        ])
+        clf.fit(train_embeddings_norm, train_labels)
     else:
         raise ValueError(f"Unknown method: {method}")
     
@@ -525,9 +595,11 @@ def run_loso_cross_validation(
     
     embedding_dir = Path(pose_embeddings_dir)
     
-    # Load all data with signer information
+    # Load all data with signer information, excluding the val split so the
+    # val signer (mrla) never appears in any fold's training set.
     embeddings, labels, signers, filenames = load_all_embeddings_with_signers(
-        embedding_dir, label_language, use_categories
+        embedding_dir, label_language, use_categories,
+        exclude_splits=['val', 'unknown']
     )
     
     unique_signers = sorted(set(signers))
@@ -661,7 +733,7 @@ Methods:
     parser.add_argument('--pose_embeddings_dir', type=str, required=True,
                         help='Directory containing precomputed pose .npy embeddings')
     parser.add_argument('--method', type=str, required=True,
-                        choices=['knn', 'linear_probe', 'svm'],
+                        choices=['knn', 'linear_probe', 'svm', 'ensemble'],
                         help='Few-shot method to use')
     parser.add_argument('--label_language', type=str, default='english',
                         choices=['italian', 'english'],
@@ -678,9 +750,18 @@ Methods:
                         help='Run specific fold (0-9) in LOSO mode, or None for all folds')
     parser.add_argument('--output_dir', type=str, default='runs/few_shot',
                         help='Output directory for LOSO results')
-    
+    parser.add_argument('--train_split', type=str, default='train',
+                        choices=['train', 'train_val'],
+                        help=(
+                            'Training data for few-shot classifiers (default: train). '
+                            'Use train_val to include val signers (mrla) in training, '
+                            'which is valid when NOT comparing against the fine-tuned model '
+                            '(fine-tuning used mrla for checkpoint selection). '
+                            'Ignored in LOSO mode (all signers are used).'
+                        ))
+
     args = parser.parse_args()
-    
+
     if args.loso:
         # Run LOSO cross-validation
         run_loso_cross_validation(
@@ -693,13 +774,14 @@ Methods:
             output_dir=args.output_dir
         )
     else:
-        # Run standard 70/30 evaluation
+        # Run standard signer-independent evaluation
         evaluate_few_shot(
             pose_embeddings_dir=args.pose_embeddings_dir,
             method=args.method,
             label_language=args.label_language,
             seed=args.seed,
-            use_categories=args.use_categories
+            use_categories=args.use_categories,
+            train_split=args.train_split
         )
 
 

@@ -1,0 +1,35 @@
+{
+  "split_strategy": "signer_independent",
+  "description": "Signer-independent train/test split - tests generalization to unseen signers",
+  "train_signers": [
+    "fal",
+    "fef",
+    "fsf",
+    "mdp",
+    "mdq",
+    "mic",
+    "mmr"
+  ],
+  "val_signers": [
+    "mrla"
+  ],
+  "test_signers": [
+    "mrlb",
+    "msf"
+  ],
+  "statistics": {
+    "total_signers": 10,
+    "train_signers_count": 7,
+    "val_signers_count": 1,
+    "test_signers_count": 2,
+    "approximate_train_ratio": 0.7,
+    "approximate_val_ratio": 0.1,
+    "approximate_test_ratio": 0.2
+  },
+  "notes": [
+    "This is a 70/10/20 split based on signers",
+    "Each signer has ~147 signs",
+    "Expected: ~1043 train samples, ~147 val samples, ~280 test samples",
+    "Alternative strategies can be configured by editing this file"
+  ]
+}
