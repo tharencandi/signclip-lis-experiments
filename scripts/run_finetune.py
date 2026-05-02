@@ -1,6 +1,8 @@
 import argparse
 import os
 
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 import torch
 from omegaconf import OmegaConf
 from torch.utils.tensorboard import SummaryWriter
@@ -37,7 +39,7 @@ def main():
         best_ckpt_path = os.path.join(save_dir, "best_checkpoint.pt")
         writer = SummaryWriter(log_dir=save_dir)
         best_score = -1.0
-        num_classes = getattr(config, 'num_classes', 147)
+        num_classes = config.get('num_classes', 147) or 147
 
         def retrieval_score(r1, r5, r10, medK):
             """Composite retrieval score in [0, 1].
