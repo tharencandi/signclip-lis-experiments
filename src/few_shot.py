@@ -35,6 +35,7 @@ Usage:
 import argparse
 import sys
 import json
+from datetime import datetime
 from pathlib import Path
 import numpy as np
 import statistics
@@ -42,6 +43,7 @@ from collections import defaultdict
 from tqdm import tqdm
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from sklearn.base import BaseEstimator, ClassifierMixin
 
@@ -213,7 +215,10 @@ def evaluate_few_shot(
     label_language: str = 'english',
     seed: int = 42,
     use_categories: bool = False,
-    train_split: str = 'train'
+    train_split: str = 'train',
+    eval_split: str = 'test',
+    num_shots: int = None,
+    output_dir: str = None
 ):
     """
     Perform few-shot evaluation using KNN or Linear Probe.
@@ -229,6 +234,12 @@ def evaluate_few_shot(
         train_split: 'train' (7 train signers only) or 'train_val' (adds val signer mrla).
                      Use 'train_val' only when NOT comparing against the fine-tuned model,
                      because fine-tuning used the val signer for checkpoint selection.
+        eval_split: 'val' (for hyperparameter selection) or 'test' (for final reporting).
+                    Always use 'val' when tuning k, method, or other hyperparameters;
+                    switch to 'test' only for final numbers cited in the paper.
+        num_shots: If set, limit training examples to this many per class (e.g. 1 or 5
+                   for 1-shot / 5-shot evaluation). Default: use all available examples.
+        output_dir: Directory to save results JSON. If None, results are not saved.
     """
     np.random.seed(seed)
     
@@ -257,10 +268,28 @@ def evaluate_few_shot(
             embedding_dir, 'train', label_language, use_categories
         )
     
-    # Load test embeddings
-    print("\nLoading test set...")
+    # Shot limiting: keep at most num_shots examples per class
+    if num_shots is not None and num_shots > 0:
+        class_indices = defaultdict(list)
+        for i, label in enumerate(train_labels):
+            class_indices[label].append(i)
+        rng = np.random.default_rng(seed)
+        selected = []
+        for label in sorted(class_indices.keys()):
+            idxs = class_indices[label]
+            k = min(num_shots, len(idxs))
+            chosen = rng.choice(len(idxs), size=k, replace=False)
+            selected.extend([idxs[j] for j in chosen])
+        selected = sorted(selected)
+        train_embeddings = train_embeddings[selected]
+        train_labels = [train_labels[i] for i in selected]
+        train_files = [train_files[i] for i in selected]
+        print(f"  Shot-limited to {num_shots} example(s)/class → {len(train_labels)} train samples total")
+
+    # Load eval embeddings (val for hyperparam selection, test for final results)
+    print(f"\nLoading {eval_split} set...")
     test_embeddings, test_labels, test_files = load_a3lis_embeddings(
-        embedding_dir, 'test', label_language, use_categories
+        embedding_dir, eval_split, label_language, use_categories
     )
     
     # Get unique classes
@@ -271,9 +300,9 @@ def evaluate_few_shot(
     print(f"\nDataset Statistics:")
     print(f"  Label type: {'Categories (macro)' if use_categories else 'Signs (micro)'}")
     print(f"  Train samples: {len(train_labels)}")
-    print(f"  Test samples: {len(test_labels)}")
+    print(f"  {eval_split.capitalize()} samples: {len(test_labels)}")
     print(f"  Train classes: {len(unique_train_classes)}")
-    print(f"  Test classes: {len(unique_test_classes)}")
+    print(f"  {eval_split.capitalize()} classes: {len(unique_test_classes)}")
     print(f"  Common classes: {len(common_classes)}")
     
     # Calculate examples per class
@@ -299,9 +328,12 @@ def evaluate_few_shot(
     
     # Train and evaluate based on method
     if method == 'knn':
-        print(f"\nTraining KNN classifier (K={len(common_classes)})...")
-        # K = number of classes (paper standard)
-        clf = KNeighborsClassifier(n_neighbors=len(common_classes), metric='cosine')
+        # K = num_shots when shot-limited (K=1 for 1-shot, K=5 for 5-shot).
+        # K = num_classes when using the full training set (paper standard).
+        k = num_shots if num_shots is not None else len(common_classes)
+        k = min(k, len(train_labels))  # guard against edge cases
+        print(f"\nTraining KNN classifier (K={k})...")
+        clf = KNeighborsClassifier(n_neighbors=k, metric='cosine')
         clf.fit(train_embeddings_norm, train_labels)
         
     elif method == 'linear_probe':
@@ -316,9 +348,20 @@ def evaluate_few_shot(
         # Using probability=True to enable predict_proba for ranking
         clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
         clf.fit(train_embeddings_norm, train_labels)
-    
+
+    elif method == 'mlp':
+        print("\nTraining MLP classifier (2 hidden layers: 512, 256)...")
+        clf = MLPClassifier(
+            hidden_layer_sizes=(512, 256),
+            activation='relu',
+            solver='adam',
+            max_iter=500,
+            random_state=seed,
+        )
+        clf.fit(train_embeddings_norm, train_labels)
+
     else:
-        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', or 'svm'")
+        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', or 'mlp'")
     
     # Predict on test set
     print("\nEvaluating on test set...")
@@ -391,8 +434,9 @@ def evaluate_few_shot(
     print(f"Results - {method.upper()}")
     print(f"{'='*60}")
     print(f"Method: {method}")
+    print(f"Eval split: {eval_split}")
     print(f"Train samples: {len(train_labels)}")
-    print(f"Test samples: {num_test}")
+    print(f"Eval samples: {num_test}")
     print(f"Classes: {len(common_classes)}")
     print(f"Avg examples per class: {avg_examples_per_class:.1f}")
     if method == 'knn':
@@ -436,8 +480,9 @@ def evaluate_few_shot(
             marker = "***" if label == test_labels[i] else "   "
             print(f"    {j}. {label:<30} (score: {score:.4f}) {marker}")
     
-    return {
+    results = {
         'method': method,
+        'recall@1': accuracy,
         'accuracy': accuracy,
         'recall@5': recall_5,
         'recall@10': recall_10,
@@ -445,8 +490,25 @@ def evaluate_few_shot(
         'num_train': len(train_labels),
         'num_test': num_test,
         'num_classes': len(common_classes),
-        'avg_examples_per_class': avg_examples_per_class
+        'avg_examples_per_class': avg_examples_per_class,
+        'num_shots': num_shots,
+        'eval_split': eval_split,
+        'train_split': train_split,
+        'pose_embeddings_dir': str(pose_embeddings_dir),
     }
+
+    if output_dir:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        shots_str = f"{num_shots}shot" if num_shots else "allshot"
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"few_shot_{method}_{shots_str}_{train_split}_{eval_split}_{timestamp}.json"
+        results_file = output_path / filename
+        with open(results_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"\nResults saved to {results_file}")
+
+    return results
 
 
 def evaluate_single_fold(
@@ -477,6 +539,15 @@ def evaluate_single_fold(
         clf.fit(train_embeddings_norm, train_labels)
     elif method == 'svm':
         clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
+        clf.fit(train_embeddings_norm, train_labels)
+    elif method == 'mlp':
+        clf = MLPClassifier(
+            hidden_layer_sizes=(512, 256),
+            activation='relu',
+            solver='adam',
+            max_iter=500,
+            random_state=seed,
+        )
         clf.fit(train_embeddings_norm, train_labels)
     elif method == "ensemble":
         # Placeholder for ensemble method (to be implemented)
@@ -733,7 +804,7 @@ Methods:
     parser.add_argument('--pose_embeddings_dir', type=str, required=True,
                         help='Directory containing precomputed pose .npy embeddings')
     parser.add_argument('--method', type=str, required=True,
-                        choices=['knn', 'linear_probe', 'svm', 'ensemble'],
+                        choices=['knn', 'linear_probe', 'svm', 'mlp', 'ensemble'],
                         help='Few-shot method to use')
     parser.add_argument('--label_language', type=str, default='english',
                         choices=['italian', 'english'],
@@ -749,7 +820,11 @@ Methods:
     parser.add_argument('--fold', type=int, default=None,
                         help='Run specific fold (0-9) in LOSO mode, or None for all folds')
     parser.add_argument('--output_dir', type=str, default='runs/few_shot',
-                        help='Output directory for LOSO results')
+                        help='Output directory for results JSON (LOSO and standard mode)')
+    parser.add_argument('--num_shots', type=int, default=None,
+                        help='Limit training examples per class (e.g. 1 or 5 for shot-limited '
+                             'evaluation). Default: use all available training examples. '
+                             'Ignored in LOSO mode.')
     parser.add_argument('--train_split', type=str, default='train',
                         choices=['train', 'train_val'],
                         help=(
@@ -758,6 +833,15 @@ Methods:
                             'which is valid when NOT comparing against the fine-tuned model '
                             '(fine-tuning used mrla for checkpoint selection). '
                             'Ignored in LOSO mode (all signers are used).'
+                        ))
+    parser.add_argument('--split', type=str, default='test',
+                        choices=['val', 'test'],
+                        dest='eval_split',
+                        help=(
+                            'Evaluation split (default: test). Use val to tune '
+                            'hyperparameters (k, method) without touching the test set. '
+                            'Only report numbers from test in the paper. '
+                            'Ignored in LOSO mode.'
                         ))
 
     args = parser.parse_args()
@@ -781,7 +865,10 @@ Methods:
             label_language=args.label_language,
             seed=args.seed,
             use_categories=args.use_categories,
-            train_split=args.train_split
+            train_split=args.train_split,
+            eval_split=args.eval_split,
+            num_shots=args.num_shots,
+            output_dir=args.output_dir
         )
 
 

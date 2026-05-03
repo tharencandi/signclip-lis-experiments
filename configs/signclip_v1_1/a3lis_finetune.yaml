@@ -48,7 +48,7 @@ fairseq:
     reset_dataloader: true
     reset_meters: true
     save_dir: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_a3lis_finetune
-    restore_file: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_a3lis_finetune/best_checkpoint_26_04.pt
+    restore_file: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_a3lis_finetune/best_checkpoint_epoch_48.pt
 task_type: sweep_small
 model:
   model_cls: MMFusionSeparate

@@ -15,7 +15,9 @@ Usage:
 """
 
 import argparse
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
@@ -68,6 +70,10 @@ Examples:
     parser.add_argument(
         '--batch_size', type=int, default=None,
         help='Batch size for evaluation (default: from config)'
+    )
+    parser.add_argument(
+        '--output_dir', type=str, default=None,
+        help='Directory to save results JSON. Default: no file saved.'
     )
     args = parser.parse_args()
 
@@ -153,6 +159,25 @@ Examples:
     print(f"  R@10↑:      {r10:>6.2f}%  ({round(r10 / 100 * n):>3}/{n})")
     print(f"  MedianK↓:   {medK:>6.1f}  (random baseline: {num_classes // 2})")
     print(f"{'='*60}\n")
+
+    if args.output_dir:
+        output_path = Path(args.output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        results_file = output_path / f"eval_finetune_{timestamp}.json"
+        results = {
+            'checkpoint': str(checkpoint_path),
+            'num_samples': n,
+            'num_classes': num_classes,
+            'loss': float(test_loss),
+            'recall@1': r1 / 100,
+            'recall@5': r5 / 100,
+            'recall@10': r10 / 100,
+            'median_rank': float(medK),
+        }
+        with open(results_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"Results saved to {results_file}")
 
 
 if __name__ == '__main__':
