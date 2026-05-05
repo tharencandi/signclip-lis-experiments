@@ -97,6 +97,7 @@ def load_a3lis_embeddings(embedding_dir: Path, split: str = 'test', label_langua
     labels = []
     filenames = []
     all_labels = set()
+    categories = []
     
     # Process each embedding in metadata
     for item in tqdm(metadata['embeddings'], desc=f"Loading {split} embeddings"):
@@ -127,10 +128,11 @@ def load_a3lis_embeddings(embedding_dir: Path, split: str = 'test', label_langua
         labels.append(label)
         filenames.append(item['embedding_file'])
         all_labels.add(label)
+        categories.append(item.get('category', 'unknown'))
     
     embeddings_array = np.array(embeddings) if embeddings else np.array([])
     
-    return embeddings_array, labels, filenames, sorted(all_labels)
+    return embeddings_array, labels, filenames, sorted(all_labels), categories
 
 
 def load_text_embeddings(text_embeddings_path: str, metadata_path: str):
@@ -307,7 +309,7 @@ def evaluate_zero_shot(
         
         # Load pose embeddings from A3LIS format
         print(f"\nLoading pose embeddings from {pose_embeddings_dir}...")
-        pose_embeddings, pose_labels, filenames, unique_labels = load_a3lis_embeddings(
+        pose_embeddings, pose_labels, filenames, unique_labels, pose_categories = load_a3lis_embeddings(
             embedding_dir, split, label_language, use_categories
         )
         
@@ -377,13 +379,22 @@ def evaluate_zero_shot(
     hit_5 = 0
     hit_10 = 0
     ranks = []
+
+    category_stats = {}
     
     print("Evaluating predictions...")
     for i, gold_label in enumerate(tqdm(pose_labels, desc="Ranking")):
+
+        cat = pose_categories[i] if not legacy_format else "unknown"
+        if cat not in category_stats:
+            category_stats[cat] = {'total': 0, 'hit_1': 0}
+        category_stats[cat]['total'] += 1
+
         ranked_labels = [text_labels[idx] for idx in ranked_indices[i]]
         
         if gold_label in ranked_labels[:1]:
             hit_1 += 1
+            category_stats[cat]['hit_1'] += 1
         if gold_label in ranked_labels[:5]:
             hit_5 += 1
         if gold_label in ranked_labels[:10]:
@@ -425,6 +436,15 @@ def evaluate_zero_shot(
     print(f"  MedianR↓:     {median_rank:>7.1f}")
     print(f"\nAccuracy:")
     print(f"  Top-1:        {recall_1:>7.2%}  ({hit_1:>5}/{num_test})")
+
+    if not legacy_format and not use_categories:
+        print(f"\n{'='*60}")
+        print(f"Top-1 Accuracy by Category")
+        print(f"{'='*60}")
+        for cat, stats in sorted(category_stats.items()):
+            cat_acc = stats['hit_1'] / stats['total']
+            print(f"  {cat:<20}: {cat_acc:>7.2%}  ({stats['hit_1']:>3}/{stats['total']:>3})")
+            
     print(f"{'='*60}\n")
     
     # Show some example predictions
