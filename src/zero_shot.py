@@ -546,10 +546,10 @@ Available prompt types:
     parser.add_argument('--use_categories', action='store_true',
                         help='Use macro categories instead of micro labels (A3LIS only)')
     parser.add_argument('--split', type=str, default='test',
-                        choices=['train', 'test'],
-                        help='Which split to evaluate')
+                        choices=['train', 'val', 'test'],
+                        help='Which split to evaluate. For fair comparison with fine-tuned model, use test.')
     parser.add_argument('--model_name', type=str, default='default',
-                        choices=['default', 'asl_citizen', 'asl_finetune', 'suisse'],
+                        choices=['default', 'asl_citizen', 'asl_finetune', 'suisse', 'a3lis_finetune'],
                         help='SignCLIP model for text embedding generation')
     parser.add_argument('--prompt_type', type=str,
                         choices=list(PROMPT_TEMPLATES.keys()),

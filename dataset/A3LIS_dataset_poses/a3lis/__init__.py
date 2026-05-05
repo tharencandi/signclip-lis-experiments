@@ -16,7 +16,7 @@ _PACKAGE_DIR = Path(__file__).parent.parent.resolve()
 DATASET_PATH = (_PACKAGE_DIR / "a3lis_poses").resolve()
 CSV_PATH = (_PACKAGE_DIR / "sign_dictionary.csv").resolve()
 CSV_WITH_CATEGORIES_PATH = (_PACKAGE_DIR / "sign_dictionary_fitted.csv").resolve()
-SPLIT_CONFIG_PATH = (_PACKAGE_DIR / "train_test_split.json").resolve()
+SPLIT_CONFIG_PATH = (_PACKAGE_DIR / "train_test_val_split.json").resolve()
 # ------------------------------------------------
 
 def load_split_config():
@@ -90,7 +90,8 @@ def get_dataset(use_categories=True, split_filter=None):
     # 2. Load split configuration
     split_config = load_split_config()
     train_signers = set(split_config['train_signers']) if split_config else set()
-    test_signers = set(split_config['test_signers']) if split_config else set()
+    val_signers   = set(split_config['val_signers'])   if split_config and 'val_signers' in split_config else set()
+    test_signers  = set(split_config['test_signers'])  if split_config else set()
     
     # 3. Find all .pose files recursively
     files = sorted(DATASET_PATH.glob("**/*.pose"))
@@ -115,6 +116,8 @@ def get_dataset(use_categories=True, split_filter=None):
             # Determine split based on signer
             if signer in train_signers:
                 split = 'train'
+            elif signer in val_signers:
+                split = 'val'
             elif signer in test_signers:
                 split = 'test'
             else:
@@ -158,21 +161,26 @@ def get_split_info():
         return None
     
     train_data = get_dataset(split_filter='train')
-    test_data = get_dataset(split_filter='test')
+    val_data   = get_dataset(split_filter='val')
+    test_data  = get_dataset(split_filter='test')
     
     from collections import Counter
     
     train_signers = Counter([d['signer'] for d in train_data])
-    test_signers = Counter([d['signer'] for d in test_data])
+    val_signers   = Counter([d['signer'] for d in val_data])
+    test_signers  = Counter([d['signer'] for d in test_data])
     
     return {
         'strategy': split_config.get('split_strategy', 'unknown'),
         'train_signers': sorted(train_signers.keys()),
-        'test_signers': sorted(test_signers.keys()),
+        'val_signers':   sorted(val_signers.keys()),
+        'test_signers':  sorted(test_signers.keys()),
         'train_count': len(train_data),
-        'test_count': len(test_data),
-        'total_count': len(train_data) + len(test_data),
-        'train_ratio': len(train_data) / (len(train_data) + len(test_data)) if (len(train_data) + len(test_data)) > 0 else 0
+        'val_count':   len(val_data),
+        'test_count':  len(test_data),
+        'total_count': len(train_data) + len(val_data) + len(test_data),
+        'train_ratio': len(train_data) / (len(train_data) + len(val_data) + len(test_data))
+            if (len(train_data) + len(val_data) + len(test_data)) > 0 else 0
     }
 
 # Expose main functions

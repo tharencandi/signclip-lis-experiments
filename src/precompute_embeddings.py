@@ -180,9 +180,11 @@ def precompute_normalised_embeddings(
             split_info = get_split_info()
             if split_info:
                 print(f"  Split strategy: {split_info['strategy']}")
-                print(f"  Train: {split_info['train_count']} samples from {len(split_info['train_signers'])} signers")
-                print(f"  Test: {split_info['test_count']} samples from {len(split_info['test_signers'])} signers")
-                print(f"  Total: {split_info['total_count']} samples")
+                print(f"  Train: {split_info.get('train_count', '?')} samples from {len(split_info['train_signers'])} signers")
+                print(f"  Test:  {split_info.get('test_count', '?')} samples from {len(split_info['test_signers'])} signers")
+                if split_info.get('val_signers'):
+                    print(f"  Val:   {split_info.get('val_count', '?')} samples from {len(split_info['val_signers'])} signers")
+                print(f"  Total: {split_info.get('total_count', '?')} samples")
             else:
                 print(f"  Found {len(dataset)} pose files (no split info)")
             
@@ -350,8 +352,8 @@ def main():
         '--model_name',
         type=str,
         default='default',
-        choices=['default', 'asl_citizen', 'asl_finetune', 'suisse'],
-        help='SignCLIP model to use'
+        choices=['default', 'asl_citizen', 'asl_finetune', 'suisse', 'a3lis_finetune'],
+        help='SignCLIP model to use (a3lis_finetune loads from runs/signclip_a3lis_finetune/best_checkpoint.pt)'
     )
     
     # Normalization control
