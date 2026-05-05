@@ -1,0 +1,68 @@
+# SignCLIP Baseline Temporal Model - Local Configuration
+#
+# Based on baseline_temporal.yaml with paths adjusted for local setup
+#
+# Pretrained weights: pretrained_models/baseline_temporal_checkpoint_best.pt
+# Quick setup: python setup_local_config.py
+#
+# Usage: from src.demo_sign import embed_pose, embed_text
+
+dataset:
+  max_video_len: 256
+  max_len: 64
+  meta_processor: SignCLIPPretrainMetaProcessor
+  video_processor: PoseProcessor
+  text_processor: TextProcessor
+  bert_name: bert-base-cased
+  test_path: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_local/dummy_test.txt
+  val_path: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_local/dummy_val.txt
+  train_path: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_local/dummy_train.txt
+  metadata_path: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_local/dummy_metadata.csv
+  vfeat_dir: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_local
+  aligner: DSAligner
+  pose_components: 'reduced_face'
+  augment_temporal: true
+fairseq:
+  common:
+    fp16: true
+    tensorboard_logdir: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_local
+    log_interval: 1000
+  dataset:
+    num_workers: 0
+    batch_size: 16
+  optimization:
+    lr:
+    - 5.0e-05
+    clip_norm: 2.0
+    optimizer: adam
+    adam_betas: (0.9, 0.98)
+    lr_scheduler: polynomial_decay
+    total_num_update: 1000000
+    warmup_updates: 122
+    weight_decay: 0.01
+    ddp_backend: no_c10d
+    max_epoch: 50
+  checkpoint:
+    no_epoch_checkpoints: true
+    reset_optimizer: true
+    reset_dataloader: true
+    reset_meters: true
+    save_dir: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_a3lis_finetune
+    restore_file: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_a3lis_finetune/best_checkpoint_epoch_48.pt
+task_type: sweep_small
+model:
+  model_cls: MMFusionSeparate
+  mm_encoder_cls: null
+  video_encoder_cls: MMBertForEncoder
+  text_encoder_cls: BertModel
+  num_hidden_video_layers: 12
+  vfeat_dim: 609
+loss:
+  loss_cls: MMContraLoss
+# In-batch video-to-video SupCon weight (0.0 to disable).
+# Directly penalises visually similar but semantically different signs clustering.
+# Set to 0.0 to ablate and compare against pure GlobalNCE.
+video_supcon_weight: 0.5
+eval:
+  save_path: /home/tharen/MASTERS/vision/project/signclip-lis-experiments/runs/signclip_a3lis_finetune
+

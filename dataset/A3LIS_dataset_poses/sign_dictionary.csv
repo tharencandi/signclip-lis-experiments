@@ -1,6 +1,6 @@
 label_italian,label_english
 abbonamento,subscription
-abitare,living
+abitare,live
 acqua,water
 affitto,rent
 allegare,attach
@@ -8,15 +8,15 @@ allergia,allergy
 ambulanza,ambulance
 amministrazione,administration
 ancona,ancona
-andata,gone ; on the way there
-andata_e_ritorno,round trip ; on the way there and back ; return
-annullato,canceled
+andata, one-way
+andata_e_ritorno,round-trip
+annullato,cancel
 aperto,open
 arrivo,arrive
 ascoli,ascoli
 asilo_nido,nursery
 assente,absent
-assessore,assessor ; council member
+assessore,councillor
 assistente,assistant
 assistente_alla_comunicazione,communication assistant
 autostrada,highway
@@ -28,8 +28,8 @@ binario,tracks
 bocciato,failed
 caldo,hot
 cambio,change
-casa,home ; house
-casello,tool booth
+casa,house
+casello,toll-booth
 chiuso,close
 cibo,food
 civitanova,civitanova
@@ -48,13 +48,13 @@ domani,tomorrow
 domenica,sunday
 elementari,elementary
 emergenza,emergency
-ente_pubblico,public body
-entro,within ; by
+ente_pubblico,public-agency
+entro,by
 esame,exam
 falconara,falconara
 fano,fano
-fermo,stopped ; still
-flebo,intravenous drip
+fermo,stop
+flebo,iv-drip
 freddo,cold
 giallo,yellow
 giorni,days
@@ -67,22 +67,22 @@ infermiere,nurse
 infezione,infection
 iniezione,injection
 interprete,interpreter
-inviare_sms,messaging
+inviare_sms,text
 istituto,institute
 jesi,jesi
 laurea,degree
-lingua_dei_segni,sign language
+lingua_dei_segni,sign-language
 litro,liter
 lunedì,monday
 macerata,macerata
 malattia,disease
 mangiare,eat
-marca_da_bollo,revenue stamp
+marca_da_bollo,revenue-stamp
 marche,marche
 martedì,tuesday
 mattina,morning
-medico,doctor ; medic
-medie,middle school
+medico,doctor
+medie,middle-school
 mercoledì,wednesday
 mesi,months
 modello,model
@@ -90,61 +90,61 @@ modulo,module
 multa,fine
 nota,note
 notte,night
-obliterare,obliterate ; stamp
-obliteratrice,stamping machine
+obliterare, stamp
+obliteratrice,stamp-machine
 oggi,today
-operazione,operation ; transaction
-orari,times ; hours
+operazione,operation 
+orari,schedule
 ospedale,hospital
 partenza,departure
 pesaro-urbino,pesaro-urbino
 pomeriggio,afternoon
-posta,mail ; post office
+posta,mail
 presente,present
-preside,principal ; headmaster
+preside,headmaster
 professore,professor
-promosso,promoted ; passed
+promosso,pass
 pronto_soccorso,emergency room
 provincia,province
 pubblica,public
-rallentamenti,slowdowns ; road slowdowns
+rallentamenti,traffic jam
 regione,region
 registro,register
 ricevuta,receipt
 ritardo,delay
-ritirare_il_numero,take the number ; take a number ; get the ticket ; get a ticket
+ritirare_il_numero,take-the-number
 ritorno,return
-roma,rome ; roma
+roma,rome
 rosso,red
-s.benedetto,s.benedetto ; san benedetto
+s.benedetto,s.benedetto
 sabato,saturday
-sala_d’attesa,waiting room
-scadenza,expiration ; deadline
+sala_d'attesa,waiting room
+scadenza,deadline
 sciopero,strike
-scontrino,till receipt ; cash register receipt
+scontrino,receipt
 scuola,school
-scuola_materna,preschool ; pre school ; pre-school
+scuola_materna,preschool
 segretario,secretary
 senigallia,senigallia
 sera,evening
 sil,silence sign
 sindaco,mayor
 sostegno,support
-sportello,door ; counter
+sportello,counter
 stazione,station
 strada,road
 studente,student
-superiori,high school ; superiors
+superiori,high school
 tassa,tax
 tecnico,technician
 telefono,phone
-torino,turin ; torino
+torino,turin
 traffico,traffic
-tratta,section ; road section
+tratta,section
 treno,train
 ufficio_informazioni,information office
 università,university
-vacanze,vacation ; holiday
+vacanze,holiday
 venerdì,friday
 verde,green
 voto,grade

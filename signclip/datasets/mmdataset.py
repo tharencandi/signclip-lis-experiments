@@ -47,16 +47,26 @@ class MMDataset(Dataset):
         if self.split == "test":
             set_seed(idx)
         meta_returns = self.meta_processor[idx]
-        if len(meta_returns) == 3:
+        # Support dict samples (A3LIS) or tuple (other datasets)
+        if isinstance(meta_returns, dict):
+            video_id = meta_returns['pose_path']
+            text_id = meta_returns['label']
+            vfeat = None
+            sample = meta_returns
+        elif len(meta_returns) == 3:
             video_id, text_id, vfeat = meta_returns
+            sample = None
         else:
             video_id, text_id = meta_returns
             vfeat = None
-        # we might return the feature tensor for the video directly
+            sample = None
         video_feature = vfeat if vfeat is not None else self.video_processor(video_id)
         text_feature = self.text_processor(text_id)
-        output = self.align_processor(video_id, video_feature, text_feature)
-        # TODO (huxu): the following is for debug purpose.
+        # Pass full sample dict to align_processor if available
+        if sample is not None:
+            output = self.align_processor(sample, video_feature, text_feature)
+        else:
+            output = self.align_processor((video_id, text_id), video_feature, text_feature)
         output.update({"idx": idx})
         return output
 
