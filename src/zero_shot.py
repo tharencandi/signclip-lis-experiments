@@ -384,10 +384,12 @@ def evaluate_zero_shot(
     
     print("Evaluating predictions...")
     for i, gold_label in enumerate(tqdm(pose_labels, desc="Ranking")):
-
+        
         cat = pose_categories[i] if not legacy_format else "unknown"
         if cat not in category_stats:
-            category_stats[cat] = {'total': 0, 'hit_1': 0}
+            # Now we track 1, 5, 10, and all ranks for the median!
+            category_stats[cat] = {'total': 0, 'hit_1': 0, 'hit_5': 0, 'hit_10': 0, 'ranks': []}
+        
         category_stats[cat]['total'] += 1
 
         ranked_labels = [text_labels[idx] for idx in ranked_indices[i]]
@@ -397,15 +399,19 @@ def evaluate_zero_shot(
             category_stats[cat]['hit_1'] += 1
         if gold_label in ranked_labels[:5]:
             hit_5 += 1
+            category_stats[cat]['hit_5'] += 1
         if gold_label in ranked_labels[:10]:
             hit_10 += 1
-        
+            category_stats[cat]['hit_10'] += 1
+            
         if gold_label in ranked_labels:
             rank = ranked_labels.index(gold_label)
             ranks.append(rank)
+            category_stats[cat]['ranks'].append(rank)
         else:
             # Gold label not in text labels
-            ranks.append(len(text_labels))  # worst rank
+            ranks.append(len(text_labels))
+            category_stats[cat]['ranks'].append(len(text_labels))
     
     # Calculate metrics
     num_test = len(pose_labels)
@@ -438,14 +444,22 @@ def evaluate_zero_shot(
     print(f"  Top-1:        {recall_1:>7.2%}  ({hit_1:>5}/{num_test})")
 
     if not legacy_format and not use_categories:
-        print(f"\n{'='*60}")
-        print(f"Top-1 Accuracy by Category")
-        print(f"{'='*60}")
+        print(f"\n{'='*75}")
+        print(f"Metrics by Category (Predicting exact words)")
+        print(f"{'='*75}")
+        print(f"  {'Category':<18} | {'Total':<5} | {'R@1':<7} | {'R@5':<7} | {'R@10':<7} | {'MedianR':<7}")
+        print(f"  {'-'*18}-+-{'-'*5}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}")
+        
         for cat, stats in sorted(category_stats.items()):
-            cat_acc = stats['hit_1'] / stats['total']
-            print(f"  {cat:<20}: {cat_acc:>7.2%}  ({stats['hit_1']:>3}/{stats['total']:>3})")
+            tot = stats['total']
+            r1 = stats['hit_1'] / tot
+            r5 = stats['hit_5'] / tot
+            r10 = stats['hit_10'] / tot
+            # Calculate median rank for this specific category
+            med_r = statistics.median(stats['ranks']) + 1 if stats['ranks'] else 0.0
             
-    print(f"{'='*60}\n")
+            print(f"  {cat:<18} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
+    print(f"{'='*75}\n")
     
     # Show some example predictions
     print("Example predictions (first 5):")
