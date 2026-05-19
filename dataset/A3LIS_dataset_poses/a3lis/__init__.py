@@ -15,7 +15,7 @@ _PACKAGE_DIR = Path(__file__).parent.parent.resolve()
 # --- CONFIG (absolute paths to dataset files) ---
 DATASET_PATH = (_PACKAGE_DIR / "a3lis_poses").resolve()
 CSV_PATH = (_PACKAGE_DIR / "sign_dictionary.csv").resolve()
-CSV_WITH_CATEGORIES_PATH = (_PACKAGE_DIR / "sign_dictionary_with_categories.csv").resolve()
+CSV_WITH_CATEGORIES_PATH = (_PACKAGE_DIR / "sign_dictionary_fitted.csv").resolve()
 SPLIT_CONFIG_PATH = (_PACKAGE_DIR / "train_test_val_split.json").resolve()
 # ------------------------------------------------
 

@@ -10,7 +10,7 @@ from pathlib import Path
 # --- CONFIG ---
 dataset_path = "a3lis_poses"  # Updated to scan subdirectories
 csv_path = "sign_dictionary.csv"
-csv_with_categories_path = "sign_dictionary_with_categories.csv"
+csv_with_categories_path = "sign_dictionary_fitted.csv"
 split_config_path = "train_test_split.json"
 # --------------
 

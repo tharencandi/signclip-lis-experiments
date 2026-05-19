@@ -114,6 +114,7 @@ def load_a3lis_embeddings(embedding_dir: Path, split: str, label_language: str =
     embeddings = []
     labels = []
     filenames = []
+    categories = []
     
     # Process each embedding in metadata
     for item in tqdm(metadata['embeddings'], desc=f"Loading {split} embeddings"):
@@ -143,10 +144,11 @@ def load_a3lis_embeddings(embedding_dir: Path, split: str, label_language: str =
         embeddings.append(emb)
         labels.append(label)
         filenames.append(item['embedding_file'])
+        categories.append(item.get('category', 'unknown'))
     
     embeddings_array = np.array(embeddings) if embeddings else np.array([])
     
-    return embeddings_array, labels, filenames
+    return embeddings_array, labels, filenames, categories
 
 
 def load_all_embeddings_with_signers(embedding_dir: Path, label_language: str = 'english', use_categories: bool = False,
@@ -252,19 +254,20 @@ def evaluate_few_shot(
     # Load train embeddings (optionally combined with val)
     if train_split == 'train_val':
         print("Loading training set (train + val signers)...")
-        train_emb_t, train_lab_t, train_files_t = load_a3lis_embeddings(
+        train_emb_t, train_lab_t, train_files_t, train_cat_t = load_a3lis_embeddings(
             embedding_dir, 'train', label_language, use_categories
         )
         print("Loading val set (adding to training)...")
-        train_emb_v, train_lab_v, train_files_v = load_a3lis_embeddings(
+        train_emb_v, train_lab_v, train_files_v, train_cat_v = load_a3lis_embeddings(
             embedding_dir, 'val', label_language, use_categories
         )
         train_embeddings = np.concatenate([train_emb_t, train_emb_v], axis=0)
         train_labels = train_lab_t + train_lab_v
         train_files = train_files_t + train_files_v
+        train_categories = train_cat_t + train_cat_v
     else:
         print("Loading training set...")
-        train_embeddings, train_labels, train_files = load_a3lis_embeddings(
+        train_embeddings, train_labels, train_files, train_categories = load_a3lis_embeddings(
             embedding_dir, 'train', label_language, use_categories
         )
     
@@ -288,7 +291,7 @@ def evaluate_few_shot(
 
     # Load eval embeddings (val for hyperparam selection, test for final results)
     print(f"\nLoading {eval_split} set...")
-    test_embeddings, test_labels, test_files = load_a3lis_embeddings(
+    test_embeddings, test_labels, test_files, test_categories = load_a3lis_embeddings(
         embedding_dir, eval_split, label_language, use_categories
     )
     
@@ -319,6 +322,7 @@ def evaluate_few_shot(
         test_embeddings = test_embeddings[mask]
         test_labels = [test_labels[i] for i in range(len(test_labels)) if mask[i]]
         test_files = [test_files[i] for i in range(len(test_files)) if mask[i]]
+        test_categories = [test_categories[i] for i in range(len(test_categories)) if mask[i]]
         print(f"  Filtered test samples: {len(test_labels)}")
     
     # Normalize embeddings for cosine similarity
@@ -368,29 +372,39 @@ def evaluate_few_shot(
     predictions = clf.predict(test_embeddings_norm)
     
     # If method supports probability, get confidence scores
-    if hasattr(clf, 'predict_proba'):
+    if hasattr(clf, 'decision_function'):
+        # Use raw geometric distances (Fixes the SVM sorting bug!)
+        probabilities = clf.decision_function(test_embeddings_norm)
+    elif hasattr(clf, 'predict_proba'):
         probabilities = clf.predict_proba(test_embeddings_norm)
     else:
         # For KNN with cosine, get distances for ranking
         distances, indices = clf.kneighbors(test_embeddings_norm)
         # Use negative distance as score (closer = higher score)
         probabilities = None
-    
+
     # Calculate metrics
     hit_1 = 0
     hit_5 = 0
     hit_10 = 0
     ranks = []
     
+    category_stats = {}
     # For ranking, we need class probabilities or distances
     class_labels = clf.classes_
     
     for i, gold_label in enumerate(tqdm(test_labels, desc="Evaluating")):
         pred_label = predictions[i]
+        cat = test_categories[i]
+
+        if cat not in category_stats:
+            category_stats[cat] = {'total': 0, 'hit_1': 0, 'hit_5': 0, 'hit_10': 0, 'ranks': []}
+        category_stats[cat]['total'] += 1
         
         # Top-1 accuracy
         if pred_label == gold_label:
             hit_1 += 1
+            category_stats[cat]['hit_1'] += 1
         
         # For top-5 and top-10, we need to rank all classes
         if probabilities is not None:
@@ -412,15 +426,19 @@ def evaluate_few_shot(
         # Check top-5 and top-10
         if gold_label in ranked_labels[:5]:
             hit_5 += 1
+            category_stats[cat]['hit_5'] += 1
         if gold_label in ranked_labels[:10]:
             hit_10 += 1
+            category_stats[cat]['hit_10'] += 1
         
         # Get rank
         if gold_label in ranked_labels:
             rank = ranked_labels.index(gold_label)
             ranks.append(rank)
+            category_stats[cat]['ranks'].append(rank)
         else:
             ranks.append(len(ranked_labels))
+            category_stats[cat]['ranks'].append(len(ranked_labels))
     
     # Calculate final metrics
     num_test = len(test_labels)
@@ -451,6 +469,23 @@ def evaluate_few_shot(
     print(f"  MedianR↓:         {median_rank:>7.1f}")
     print(f"\nAccuracy:")
     print(f"  Top-1:            {accuracy:>7.2%}  ({hit_1:>5}/{num_test})")
+
+    if not use_categories:
+        print(f"\n{'='*75}")
+        print(f"Metrics by Category (Predicting exact words)")
+        print(f"{'='*75}")
+        print(f"  {'Category':<18} | {'Total':<5} | {'R@1':<7} | {'R@5':<7} | {'R@10':<7} | {'MedianR':<7}")
+        print(f"  {'-'*18}-+-{'-'*5}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}")
+        
+        for cat, stats in sorted(category_stats.items()):
+            tot = stats['total']
+            r1 = stats['hit_1'] / tot
+            r5 = stats['hit_5'] / tot
+            r10 = stats['hit_10'] / tot
+            med_r = statistics.median(stats['ranks']) + 1 if stats['ranks'] else 0.0
+            
+            print(f"  {cat:<18} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
+
     print(f"{'='*60}\n")
     
     # Show some example predictions
