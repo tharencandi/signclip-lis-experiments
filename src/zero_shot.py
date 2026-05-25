@@ -72,6 +72,68 @@ PROMPT_TEMPLATES = {
 }
 
 
+def load_a3lis_embeddings(embedding_dir: Path, split: str = 'test', label_language: str = 'english', use_categories: bool = False):
+    """
+    Load A3LIS precomputed pose embeddings using embeddings_metadata.json.
+    
+    Args:
+        embedding_dir: Directory containing .npy embedding files and metadata
+        split: 'train' or 'test'
+        label_language: 'italian' or 'english' for label selection
+        use_categories: If True, use macro categories instead of micro labels
+    
+    Returns:
+        Tuple of (embeddings_array, labels_list, filenames_list, all_labels)
+        all_labels is the set of unique labels for text embedding generation
+    """
+    # Load metadata
+    metadata_path = embedding_dir / 'embeddings_metadata.json'
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Metadata not found: {metadata_path}")
+    
+    with open(metadata_path, 'r', encoding='utf-8') as f:
+        metadata = json.load(f)
+    
+    embeddings = []
+    labels = []
+    filenames = []
+    all_labels = set()
+    categories = []
+    
+    # Process each embedding in metadata
+    for item in tqdm(metadata['embeddings'], desc=f"Loading {split} embeddings"):
+        # Filter by split
+        if item['split'] != split:
+            continue
+        
+        # Get label based on use_categories flag
+        if use_categories:
+            # Use macro category (should always exist)
+            label = item.get('category', item['label_italian'])
+        elif label_language == 'italian':
+            label = item['label_italian']
+        else:  # english
+            # Use first English label
+            label = item['labels_english'][0] if item['labels_english'] else item['label_italian']
+        
+        # Load embedding
+        emb_path = embedding_dir / item['embedding_file']
+        if not emb_path.exists():
+            continue
+        
+        emb = np.load(emb_path)
+        if emb.ndim > 1:
+            emb = emb.squeeze()
+        
+        embeddings.append(emb)
+        labels.append(label)
+        filenames.append(item['embedding_file'])
+        all_labels.add(label)
+        categories.append(item.get('category', 'unknown'))
+    
+    embeddings_array = np.array(embeddings) if embeddings else np.array([])
+    
+    return embeddings_array, labels, filenames, sorted(all_labels), categories
 
 
 def load_text_embeddings(text_embeddings_path: str, metadata_path: str):
@@ -248,7 +310,7 @@ def evaluate_zero_shot(
         
         # Load pose embeddings from A3LIS format
         print(f"\nLoading pose embeddings from {pose_embeddings_dir}...")
-        pose_embeddings, pose_labels, filenames, unique_labels = load_a3lis_embeddings(
+        pose_embeddings, pose_labels, filenames, unique_labels, pose_categories = load_a3lis_embeddings(
             embedding_dir, split, label_language, use_categories
         )
         
@@ -318,24 +380,39 @@ def evaluate_zero_shot(
     hit_5 = 0
     hit_10 = 0
     ranks = []
+
+    category_stats = {}
     
     print("Evaluating predictions...")
     for i, gold_label in enumerate(tqdm(pose_labels, desc="Ranking")):
+        
+        cat = pose_categories[i] if not legacy_format else "unknown"
+        if cat not in category_stats:
+            # Now we track 1, 5, 10, and all ranks for the median!
+            category_stats[cat] = {'total': 0, 'hit_1': 0, 'hit_5': 0, 'hit_10': 0, 'ranks': []}
+        
+        category_stats[cat]['total'] += 1
+
         ranked_labels = [text_labels[idx] for idx in ranked_indices[i]]
         
         if gold_label in ranked_labels[:1]:
             hit_1 += 1
+            category_stats[cat]['hit_1'] += 1
         if gold_label in ranked_labels[:5]:
             hit_5 += 1
+            category_stats[cat]['hit_5'] += 1
         if gold_label in ranked_labels[:10]:
             hit_10 += 1
-        
+            category_stats[cat]['hit_10'] += 1
+            
         if gold_label in ranked_labels:
             rank = ranked_labels.index(gold_label)
             ranks.append(rank)
+            category_stats[cat]['ranks'].append(rank)
         else:
             # Gold label not in text labels
-            ranks.append(len(text_labels))  # worst rank
+            ranks.append(len(text_labels))
+            category_stats[cat]['ranks'].append(len(text_labels))
     
     # Calculate metrics
     num_test = len(pose_labels)
@@ -366,7 +443,24 @@ def evaluate_zero_shot(
     print(f"  MedianR↓:     {median_rank:>7.1f}")
     print(f"\nAccuracy:")
     print(f"  Top-1:        {recall_1:>7.2%}  ({hit_1:>5}/{num_test})")
-    print(f"{'='*60}\n")
+
+    if not legacy_format and not use_categories:
+        print(f"\n{'='*75}")
+        print(f"Metrics by Category (Predicting exact words)")
+        print(f"{'='*75}")
+        print(f"  {'Category':<18} | {'Total':<5} | {'R@1':<7} | {'R@5':<7} | {'R@10':<7} | {'MedianR':<7}")
+        print(f"  {'-'*18}-+-{'-'*5}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}")
+        
+        for cat, stats in sorted(category_stats.items()):
+            tot = stats['total']
+            r1 = stats['hit_1'] / tot
+            r5 = stats['hit_5'] / tot
+            r10 = stats['hit_10'] / tot
+            # Calculate median rank for this specific category
+            med_r = statistics.median(stats['ranks']) + 1 if stats['ranks'] else 0.0
+            
+            print(f"  {cat:<18} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
+    print(f"{'='*75}\n")
     
     # Show some example predictions
     print("Example predictions (first 5):")

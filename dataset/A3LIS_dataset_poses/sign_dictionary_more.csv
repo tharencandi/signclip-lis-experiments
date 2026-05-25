@@ -1,0 +1,150 @@
+label_italian,label_english,category
+abbonamento,subscription,railway station
+abitare,living ; to live,common life
+acqua,water,common life
+affitto,rent,common life
+allegare,attach,education
+allergia,allergy,hospital
+ambulanza,ambulance,hospital
+amministrazione,administration,public institute
+ancona,ancona,cities
+andata,gone ; on the way there,railway station
+andata_e_ritorno,round trip ; on the way there and back ; return,railway station
+annullato,canceled,railway station
+aperto,open,common life
+arrivo,arrive ; arrival,railway station
+ascoli,ascoli,cities
+asilo_nido,nursery,education
+assente,absent,education
+assessore,assessor ; council member,public institute
+assistente,assistant,public institute
+assistente_alla_comunicazione,communication assistant,public institute
+autostrada,highway,highway
+avviso,notice,education
+banca,bank,public institute
+bidello,janitor,education
+biglietto,ticket,railway station
+binario,tracks,railway station
+bocciato,failed,education
+caldo,hot,common life
+cambio,change,railway station
+casa,home ; house,common life
+casello,tool booth,highway
+chiuso,close,common life
+cibo,food,common life
+civitanova,civitanova,cities
+commissione,commission,education
+compilare,compile,public institute
+comune,municipality,public institute
+consegnare,deliver,common life
+costo,cost,common life
+cura,cure,hospital
+data,date,time
+diploma,diploma,education
+dirigente,executive,public institute
+disinfettare,disinfect,hospital
+dolore,pain,hospital
+domani,tomorrow,time
+domenica,sunday,time
+elementari,elementary,education
+emergenza,emergency,hospital
+ente_pubblico,public body,public institute
+entro,within ; by,education
+esame,exam,education
+falconara,falconara,cities
+fano,fano,cities
+fermo,stopped ; still,railway station
+flebo,intravenous drip,hospital
+freddo,cold,common life
+giallo,yellow,hospital
+giorni,days,time
+giorno,day,time
+giovedì,thursday,time
+giudizio,judgement,education
+ieri,yesterday,time
+impiegato,employee,public institute
+infermiere,nurse,hospital
+infezione,infection,hospital
+iniezione,injection,hospital
+interprete,interpreter,public institute
+inviare_sms,messaging,common life
+istituto,institute,education
+jesi,jesi,cities
+laurea,degree,education
+lingua_dei_segni,sign language,common life
+litro,liter,common life
+lunedì,monday,time
+macerata,macerata,cities
+malattia,disease,hospital
+mangiare,eat ; to eat,common life
+marca_da_bollo,revenue stamp,public institute
+marche,marche,cities
+martedì,tuesday,time
+mattina,morning,time
+medico,doctor ; medic,hospital
+medie,middle school,education
+mercoledì,wednesday,time
+mesi,months,time
+modello,model,public institute
+modulo,module,public institute
+multa,fine,highway
+nota,note,education
+notte,night,time
+obliterare,obliterate ; stamp,railway station
+obliteratrice,stamping machine,railway station
+oggi,today,time
+operazione,operation ; transaction,hospital
+orari,times ; hours,time
+ospedale,hospital,hospital
+partenza,departure,railway station
+pesaro-urbino,pesaro-urbino,cities
+pomeriggio,afternoon,time
+posta,mail ; post office,public institute
+presente,present,education
+preside,principal ; headmaster ; dean,education
+professore,professor,education
+promosso,promoted ; passed,education
+pronto_soccorso,emergency room ; first aid,hospital
+provincia,province,public institute
+pubblica,public,public institute
+rallentamenti,slowdowns ; road slowdowns,highway
+regione,region,public institute
+registro,register,education
+ricevuta,receipt,public institute
+ritardo,delay,railway station
+ritirare_il_numero,take the number ; take a number ; get the ticket ; get a ticket,public institute
+ritorno,return,railway station
+roma,rome ; roma,cities
+rosso,red,hospital
+s.benedetto,s.benedetto ; san benedetto,cities
+sabato,saturday,time
+sala_d’attesa,waiting room,hospital
+scadenza,expiration ; deadline,education
+sciopero,strike,railway station
+scontrino,till receipt ; cash register receipt,public institute
+scuola,school,education
+scuola_materna,preschool ; pre school ; pre-school,education
+segretario,secretary,education
+senigallia,senigallia,cities
+sera,evening,time
+sil,silence sign,common life
+sindaco,mayor,public institute
+sostegno,support,education
+sportello,door ; counter,public institute
+stazione,station,railway station
+strada,road,highway
+studente,student,education
+superiori,high school ; superiors,education
+tassa,tax,public institute
+tecnico,technician,highway
+telefono,phone ; telephone,common life
+torino,turin ; torino,cities
+traffico,traffic,highway
+tratta,section ; road section,highway
+treno,train,railway station
+ufficio_informazioni,information office,public institute
+università,university,education
+vacanze,vacation ; holiday,common life
+venerdì,friday,time
+verde,green,hospital
+voto,grade,education
