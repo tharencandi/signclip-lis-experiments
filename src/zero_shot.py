@@ -61,6 +61,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.demo_sign import embed_text
+from src.embedding_utils import load_a3lis_embeddings
 
 
 # Predefined text prompt templates for prompt engineering experiments

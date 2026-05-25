@@ -46,6 +46,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from sklearn.base import BaseEstimator, ClassifierMixin
+from src.embedding_utils import load_a3lis_embeddings, load_all_embeddings_with_signers
 
 # Add project root to path for signclip imports
 project_root = Path(__file__).parent.parent
@@ -270,7 +271,7 @@ def evaluate_few_shot(
         train_embeddings, train_labels, train_files, train_categories = load_a3lis_embeddings(
             embedding_dir, 'train', label_language, use_categories
         )
-    
+
     # Shot limiting: keep at most num_shots examples per class
     if num_shots is not None and num_shots > 0:
         class_indices = defaultdict(list)
