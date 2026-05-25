@@ -61,6 +61,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.demo_sign import embed_text
+from src.embedding_utils import load_a3lis_embeddings
 
 
 # Predefined text prompt templates for prompt engineering experiments
@@ -71,66 +72,6 @@ PROMPT_TEMPLATES = {
 }
 
 
-def load_a3lis_embeddings(embedding_dir: Path, split: str = 'test', label_language: str = 'english', use_categories: bool = False):
-    """
-    Load A3LIS precomputed pose embeddings using embeddings_metadata.json.
-    
-    Args:
-        embedding_dir: Directory containing .npy embedding files and metadata
-        split: 'train' or 'test'
-        label_language: 'italian' or 'english' for label selection
-        use_categories: If True, use macro categories instead of micro labels
-    
-    Returns:
-        Tuple of (embeddings_array, labels_list, filenames_list, all_labels)
-        all_labels is the set of unique labels for text embedding generation
-    """
-    # Load metadata
-    metadata_path = embedding_dir / 'embeddings_metadata.json'
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"Metadata not found: {metadata_path}")
-    
-    with open(metadata_path, 'r', encoding='utf-8') as f:
-        metadata = json.load(f)
-    
-    embeddings = []
-    labels = []
-    filenames = []
-    all_labels = set()
-    
-    # Process each embedding in metadata
-    for item in tqdm(metadata['embeddings'], desc=f"Loading {split} embeddings"):
-        # Filter by split
-        if item['split'] != split:
-            continue
-        
-        # Get label based on use_categories flag
-        if use_categories:
-            # Use macro category (should always exist)
-            label = item.get('category', item['label_italian'])
-        elif label_language == 'italian':
-            label = item['label_italian']
-        else:  # english
-            # Use first English label
-            label = item['labels_english'][0] if item['labels_english'] else item['label_italian']
-        
-        # Load embedding
-        emb_path = embedding_dir / item['embedding_file']
-        if not emb_path.exists():
-            continue
-        
-        emb = np.load(emb_path)
-        if emb.ndim > 1:
-            emb = emb.squeeze()
-        
-        embeddings.append(emb)
-        labels.append(label)
-        filenames.append(item['embedding_file'])
-        all_labels.add(label)
-    
-    embeddings_array = np.array(embeddings) if embeddings else np.array([])
-    
-    return embeddings_array, labels, filenames, sorted(all_labels)
 
 
 def load_text_embeddings(text_embeddings_path: str, metadata_path: str):

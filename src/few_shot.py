@@ -46,6 +46,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from sklearn.base import BaseEstimator, ClassifierMixin
+from src.embedding_utils import load_a3lis_embeddings, load_all_embeddings_with_signers
 
 # Add project root to path for signclip imports
 project_root = Path(__file__).parent.parent
@@ -88,125 +89,6 @@ class EnsembleClassifier(BaseEstimator, ClassifierMixin):
     def predict(self, X):
         
         return self.predict_majority(X)
-
-
-def load_a3lis_embeddings(embedding_dir: Path, split: str, label_language: str = 'english', use_categories: bool = False):
-    """
-    Load A3LIS precomputed pose embeddings using embeddings_metadata.json.
-    
-    Args:
-        embedding_dir: Directory containing .npy embedding files and metadata
-        split: 'train' or 'test'
-        label_language: 'italian' or 'english' for label selection
-        use_categories: If True, use macro categories instead of micro labels
-    
-    Returns:
-        Tuple of (embeddings_array, labels_list, filenames_list)
-    """
-    # Load metadata
-    metadata_path = embedding_dir / 'embeddings_metadata.json'
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"Metadata not found: {metadata_path}")
-    
-    with open(metadata_path, 'r', encoding='utf-8') as f:
-        metadata = json.load(f)
-    
-    embeddings = []
-    labels = []
-    filenames = []
-    
-    # Process each embedding in metadata
-    for item in tqdm(metadata['embeddings'], desc=f"Loading {split} embeddings"):
-        # Filter by split
-        if item['split'] != split:
-            continue
-        
-        # Get label based on use_categories flag
-        if use_categories:
-            # Use macro category (should always exist)
-            label = item.get('category', item['label_italian'])
-        elif label_language == 'italian':
-            label = item['label_italian']
-        else:  # english
-            # Use first English label
-            label = item['labels_english'][0] if item['labels_english'] else item['label_italian']
-        
-        # Load embedding
-        emb_path = embedding_dir / item['embedding_file']
-        if not emb_path.exists():
-            continue
-        
-        emb = np.load(emb_path)
-        if emb.ndim > 1:
-            emb = emb.squeeze()
-        
-        embeddings.append(emb)
-        labels.append(label)
-        filenames.append(item['embedding_file'])
-    
-    embeddings_array = np.array(embeddings) if embeddings else np.array([])
-    
-    return embeddings_array, labels, filenames
-
-
-def load_all_embeddings_with_signers(embedding_dir: Path, label_language: str = 'english', use_categories: bool = False,
-                                     exclude_splits: list = None):
-    """
-    Load ALL A3LIS embeddings (train + test) with signer information for LOSO.
-    
-    Args:
-        embedding_dir: Directory containing .npy embedding files and metadata
-        label_language: 'italian' or 'english' for label selection
-        use_categories: If True, use macro categories instead of micro labels
-        exclude_splits: Optional list of split values to exclude (e.g. ['val', 'unknown']).
-                        Use this to prevent the val signer from appearing in any LOSO
-                        training fold, keeping evaluation signer-independent.
-    
-    Returns:
-        Tuple of (embeddings_array, labels_list, signers_list, filenames_list)
-    """
-    metadata_path = embedding_dir / 'embeddings_metadata.json'
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"Metadata not found: {metadata_path}")
-    
-    with open(metadata_path, 'r', encoding='utf-8') as f:
-        metadata = json.load(f)
-    
-    embeddings = []
-    labels = []
-    signers = []
-    filenames = []
-    
-    for item in tqdm(metadata['embeddings'], desc="Loading all embeddings"):
-        # Exclude items from specified splits (e.g. val, unknown)
-        if exclude_splits and item.get('split', 'unknown') in exclude_splits:
-            continue
-
-        # Get label
-        if use_categories:
-            label = item.get('category', item['label_italian'])
-        elif label_language == 'italian':
-            label = item['label_italian']
-        else:
-            label = item['labels_english'][0] if item['labels_english'] else item['label_italian']
-        
-        # Load embedding
-        emb_path = embedding_dir / item['embedding_file']
-        if not emb_path.exists():
-            continue
-        
-        emb = np.load(emb_path)
-        if emb.ndim > 1:
-            emb = emb.squeeze()
-        
-        embeddings.append(emb)
-        labels.append(label)
-        signers.append(item['signer'])
-        filenames.append(item['embedding_file'])
-    
-    embeddings_array = np.array(embeddings) if embeddings else np.array([])
-    
-    return embeddings_array, labels, signers, filenames
 
 
 def evaluate_few_shot(
@@ -252,11 +134,11 @@ def evaluate_few_shot(
     # Load train embeddings (optionally combined with val)
     if train_split == 'train_val':
         print("Loading training set (train + val signers)...")
-        train_emb_t, train_lab_t, train_files_t = load_a3lis_embeddings(
+        train_emb_t, train_lab_t, train_files_t, _ = load_a3lis_embeddings(
             embedding_dir, 'train', label_language, use_categories
         )
         print("Loading val set (adding to training)...")
-        train_emb_v, train_lab_v, train_files_v = load_a3lis_embeddings(
+        train_emb_v, train_lab_v, train_files_v, _ = load_a3lis_embeddings(
             embedding_dir, 'val', label_language, use_categories
         )
         train_embeddings = np.concatenate([train_emb_t, train_emb_v], axis=0)
@@ -264,10 +146,10 @@ def evaluate_few_shot(
         train_files = train_files_t + train_files_v
     else:
         print("Loading training set...")
-        train_embeddings, train_labels, train_files = load_a3lis_embeddings(
+        train_embeddings, train_labels, train_files, _ = load_a3lis_embeddings(
             embedding_dir, 'train', label_language, use_categories
         )
-    
+
     # Shot limiting: keep at most num_shots examples per class
     if num_shots is not None and num_shots > 0:
         class_indices = defaultdict(list)
@@ -288,7 +170,7 @@ def evaluate_few_shot(
 
     # Load eval embeddings (val for hyperparam selection, test for final results)
     print(f"\nLoading {eval_split} set...")
-    test_embeddings, test_labels, test_files = load_a3lis_embeddings(
+    test_embeddings, test_labels, test_files, _ = load_a3lis_embeddings(
         embedding_dir, eval_split, label_language, use_categories
     )
     
