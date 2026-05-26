@@ -10,27 +10,14 @@ Key Components:
 2. Smart Head: MLP adapter with residual connections
 3. Dual-Loss: Cross-Entropy (label smoothing) + Optional Supervised Decoupled Contrastive Loss (inspired by SignCL)
 4. Training: EMA (0.9998), small batch (16), strong augmentation
-5. Evaluation: 10-fold Leave-One-Signer-Out (LOSO) cross-validation
+5. Evaluation: Fixed signer split (7 train, 1 val for monitoring, 2 test)
 
 Usage:
-    # Train and evaluate with LOSO cross-validation
+    # Standard fixed split (7 train / 1 val / 2 test signers)
     python src/smart_head.py \
         --embeddings_dir dataset/embeddings/a3lis_normalised \
         --output_dir runs/smart_head \
-        --epochs 100 \
-        --batch_size 16 \
-        --lr 0.001 \
-        --lambda_contrastive 0.01 \
-        --ema_momentum 0.9998 \
-        --signcl_loss True \
-    
-    # Train on specific fold
-    python src/smart_head.py \
-        --embeddings_dir dataset/embeddings/a3lis_normalised \
-        --output_dir runs/smart_head \
-        --fold 0 \
-        --epochs 100
-        --signcl_loss True
+        --epochs 100 --batch_size 16 --lr 0.001
 """
 
 import argparse
@@ -54,6 +41,8 @@ import torch.optim as optim
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+
+from src.embedding_utils import load_a3lis_embeddings, load_all_embeddings_with_signers
 
 
 class SmartHead(nn.Module):
@@ -247,53 +236,7 @@ class EMATracker:
         self.backup = {}
 
 
-def load_embeddings_with_metadata(embeddings_dir: Path):
-    """
-    Load precomputed embeddings and metadata for A3LIS dataset.
-    
-    Returns:
-        embeddings: np.ndarray (num_samples, embedding_dim)
-        labels: List[str] - label for each sample
-        signers: List[str] - signer for each sample
-        filenames: List[str] - filename for each sample
-        unique_labels: List[str] - sorted unique labels
-    """
-    metadata_path = embeddings_dir / 'embeddings_metadata.json'
-    
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"Metadata not found: {metadata_path}")
-    
-    with open(metadata_path, 'r', encoding='utf-8') as f:
-        metadata = json.load(f)
-    
-    embeddings = []
-    labels = []
-    signers = []
-    filenames = []
-    
-    for item in tqdm(metadata['embeddings'], desc="Loading embeddings"):
-        emb_path = embeddings_dir / item['embedding_file']
-        if not emb_path.exists():
-            continue
-        
-        emb = np.load(emb_path)
-        if emb.ndim > 1:
-            emb = emb.squeeze()
-        
-        embeddings.append(emb)
-        labels.append(item['label_italian'])
-        signers.append(item['signer'])
-        filenames.append(item['embedding_file'])
-    
-    embeddings = np.array(embeddings)
-    unique_labels = sorted(set(labels))
-    
-    print(f"\nLoaded {len(embeddings)} embeddings")
-    print(f"Embedding dim: {embeddings.shape[1]}")
-    print(f"Unique labels: {len(unique_labels)}")
-    print(f"Unique signers: {len(set(signers))}")
-    
-    return embeddings, labels, signers, filenames, unique_labels
+
 
 
 def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optimizer,
@@ -443,9 +386,17 @@ def train_and_evaluate_fold(
     test_signers: List[str],
     label_to_idx: Dict[str, int],
     args,
-    device: torch.device
+    device: torch.device,
+    val_loader: Optional[DataLoader] = None,
 ):
-    """Train and evaluate on a single LOSO fold."""
+    """Train and evaluate on a single fold.
+
+    Args:
+        val_loader: If provided, used for per-epoch evaluation and early stopping.
+                    Final evaluation always uses the test_loader built from
+                    test_embeddings/test_labels. When None (LOSO mode), the test
+                    loader doubles as the monitoring loader.
+    """
     
     print(f"\n{'='*60}")
     print(f"Fold {fold + 1}/10: Test signer = {test_signers[0]}")
@@ -501,9 +452,15 @@ def train_and_evaluate_fold(
     # EMA tracker
     ema = EMATracker(model, momentum=args.ema_momentum) if args.use_ema else None
     
+    # val_loader is used for per-epoch monitoring and early stopping when provided.
+    # In LOSO mode (val_loader=None) the test loader doubles as the monitor.
+    monitor_loader = val_loader if val_loader is not None else test_loader
+    monitor_label  = 'Val' if val_loader is not None else 'Test'
+
     # Training loop
     best_r_at_1 = 0
     best_epoch = 0
+    patience_counter = 0
     train_history = []
 
     for epoch in range(1, args.epochs + 1):
@@ -513,11 +470,11 @@ def train_and_evaluate_fold(
             args.lambda_contrastive, ema, device, epoch
         )
 
-        # Evaluate with EMA weights
+        # Evaluate on monitor split (val or test) with EMA weights
         if ema is not None:
             ema.apply_shadow()
 
-        eval_metrics = evaluate(model, test_loader, device, num_classes)
+        eval_metrics = evaluate(model, monitor_loader, device, num_classes)
 
         if ema is not None:
             ema.restore()
@@ -525,10 +482,11 @@ def train_and_evaluate_fold(
         # Learning rate step
         scheduler.step()
 
-        # Track best model
+        # Track best model (based on monitor split R@1)
         if eval_metrics['r@1'] > best_r_at_1:
             best_r_at_1 = eval_metrics['r@1']
             best_epoch = epoch
+            patience_counter = 0
 
             # Save best model
             if args.save_models:
@@ -541,25 +499,33 @@ def train_and_evaluate_fold(
                     'optimizer_state_dict': optimizer.state_dict(),
                     'metrics': eval_metrics
                 }, save_path)
+        else:
+            patience_counter += 1
 
         # Log progress
         print(f"\nEpoch {epoch}/{args.epochs}")
-        print(f"  Train: loss={train_metrics['loss']:.4f}, "
+        print(f"  Train:   loss={train_metrics['loss']:.4f}, "
               f"ce={train_metrics['ce_loss']:.4f}, "
               f"cl={train_metrics['cl_loss']:.4f}, "
               f"acc={train_metrics['accuracy']:.2f}%")
-        print(f"  Test:  R@1={eval_metrics['r@1']:.4f}, "
+        print(f"  {monitor_label+':':<6}   R@1={eval_metrics['r@1']:.4f}, "
               f"R@5={eval_metrics['r@5']:.4f}, "
               f"R@10={eval_metrics['r@10']:.4f}, "
               f"MedianR={eval_metrics['median_rank']:.1f}")
-        print(f"  Best:  R@1={best_r_at_1:.4f} (epoch {best_epoch})")
-        print(f"  LR:    {scheduler.get_last_lr()[0]:.6f}")
+        print(f"  Best:    R@1={best_r_at_1:.4f} (epoch {best_epoch})")
+        print(f"  LR:      {scheduler.get_last_lr()[0]:.6f}")
 
         train_history.append({
             'epoch': epoch,
             'train': train_metrics,
-            'test': eval_metrics
+            monitor_label.lower(): eval_metrics
         })
+
+        # Early stopping
+        if args.patience > 0 and patience_counter >= args.patience:
+            print(f"\nEarly stopping triggered at epoch {epoch} "
+                  f"(no {monitor_label} R@1 improvement for {args.patience} epochs)")
+            break
     
     # Final evaluation with best EMA weights
     if args.save_models and ema is not None:
@@ -592,105 +558,90 @@ def train_and_evaluate_fold(
     }
 
 
-def run_loso_cross_validation(embeddings_dir: str, args, device: torch.device):
-    """Run 10-fold Leave-One-Signer-Out cross-validation."""
-    
+def run_standard_split(
+    embeddings_dir: str,
+    args,
+    device: torch.device,
+):
+    """Train on 7 signers, monitor on 1 val signer per epoch, final eval on 2 test signers.
+
+    Standard practice: Train split for learning, Val split for per-epoch monitoring and
+    early stopping, Test split for final held-out evaluation.
+
+    Returns: None (saves results to JSON)
+    """
     embeddings_dir = Path(embeddings_dir)
-    
-    # Load all data
-    embeddings, labels, signers, filenames, unique_labels = load_embeddings_with_metadata(embeddings_dir)
-    
-    # Create label to index mapping
+
+    # --- Training data (7 signers) ---
+    print("Loading training set (train signers only)...")
+    train_embeddings, train_labels, _, _ = load_a3lis_embeddings(
+        embeddings_dir, split='train',
+        label_language=args.label_language,
+        use_categories=args.use_categories,
+    )
+    train_signers = ['unknown'] * len(train_labels)
+
+    # --- Val data (1 signer, for per-epoch monitoring + early stopping) ---
+    print("Loading val set (for epoch monitoring + early stopping)...")
+    val_embeddings, val_labels, _, _ = load_a3lis_embeddings(
+        embeddings_dir, split='val',
+        label_language=args.label_language,
+        use_categories=args.use_categories,
+    )
+    val_signers = ['unknown'] * len(val_labels)
+
+    # --- Test data (final evaluation, always) ---
+    print("Loading test set (for final evaluation)...")
+    test_embeddings, test_labels, _, _ = load_a3lis_embeddings(
+        embeddings_dir, split='test',
+        label_language=args.label_language,
+        use_categories=args.use_categories,
+    )
+    test_signers = ['unknown'] * len(test_labels)
+
+    # Build unified label index across all splits
+    all_split_labels = set(train_labels) | set(val_labels) | set(test_labels)
+    unique_labels = sorted(all_split_labels)
     label_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
-    
-    # Get unique signers (should be 10 for A3LIS)
-    unique_signers = sorted(set(signers))
-    print(f"\nUnique signers: {unique_signers}")
-    print(f"Number of folds: {len(unique_signers)}")
-    
-    if len(unique_signers) != 10:
-        print(f"WARNING: Expected 10 signers for A3LIS-147, found {len(unique_signers)}")
-    
-    # Run LOSO cross-validation
-    all_results = []
-    
-    for fold, test_signer in enumerate(unique_signers):
-        # Skip if only running specific fold
-        if args.fold is not None and fold != args.fold:
-            continue
-        
-        # Split data by signer
-        train_mask = np.array([s != test_signer for s in signers])
-        test_mask = np.array([s == test_signer for s in signers])
-        
-        train_embeddings = embeddings[train_mask]
-        train_labels = [labels[i] for i in range(len(labels)) if train_mask[i]]
-        train_signers_fold = [signers[i] for i in range(len(signers)) if train_mask[i]]
-        
-        test_embeddings = embeddings[test_mask]
-        test_labels = [labels[i] for i in range(len(labels)) if test_mask[i]]
-        test_signers_fold = [signers[i] for i in range(len(signers)) if test_mask[i]]
-        
-        # Train and evaluate on this fold
-        fold_results = train_and_evaluate_fold(
-            fold, train_embeddings, train_labels, train_signers_fold,
-            test_embeddings, test_labels, test_signers_fold,
-            label_to_idx, args, device
-        )
-        
-        all_results.append(fold_results)
-    
-    # Aggregate results across all folds
-    if len(all_results) == len(unique_signers):
-        print(f"\n{'='*60}")
-        print(f"LOSO Cross-Validation Results (All 10 Folds)")
-        print(f"{'='*60}\n")
-        
-        # Per-fold results
-        for result in all_results:
-            m = result['final_metrics']
-            print(f"Fold {result['fold']+1} ({result['test_signer']:>4}): "
-                  f"R@1={m['r@1']:.4f}, R@5={m['r@5']:.4f}, "
-                  f"R@10={m['r@10']:.4f}, MedianR={m['median_rank']:.1f}")
-        
-        # Average results
-        avg_r1 = np.mean([r['final_metrics']['r@1'] for r in all_results])
-        avg_r5 = np.mean([r['final_metrics']['r@5'] for r in all_results])
-        avg_r10 = np.mean([r['final_metrics']['r@10'] for r in all_results])
-        avg_median_rank = np.mean([r['final_metrics']['median_rank'] for r in all_results])
-        
-        std_r1 = np.std([r['final_metrics']['r@1'] for r in all_results])
-        std_r5 = np.std([r['final_metrics']['r@5'] for r in all_results])
-        std_r10 = np.std([r['final_metrics']['r@10'] for r in all_results])
-        std_median_rank = np.std([r['final_metrics']['median_rank'] for r in all_results])
-        
-        print(f"\n{'='*60}")
-        print(f"Average Across All Folds")
-        print(f"{'='*60}")
-        print(f"  R@1↑:        {avg_r1:.4f} ± {std_r1:.4f}")
-        print(f"  R@5↑:        {avg_r5:.4f} ± {std_r5:.4f}")
-        print(f"  R@10↑:       {avg_r10:.4f} ± {std_r10:.4f}")
-        print(f"  MedianR↓:    {avg_median_rank:.2f} ± {std_median_rank:.2f}")
-        print(f"{'='*60}\n")
-        
-        # Save aggregated results
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        with open(output_dir / 'loso_results.json', 'w') as f:
-            json.dump({
-                'pose_embeddings_dir': args.embeddings_dir,
-                'all_folds': all_results,
-                'average': {
-                    'r@1': {'mean': avg_r1, 'std': std_r1},
-                    'r@5': {'mean': avg_r5, 'std': std_r5},
-                    'r@10': {'mean': avg_r10, 'std': std_r10},
-                    'median_rank': {'mean': avg_median_rank, 'std': std_median_rank}
-                },
-                'hyperparameters': vars(args)
-            }, f, indent=2)
-        
-        print(f"Results saved to {output_dir / 'loso_results.json'}\n")
+
+    print(f"\nTrain samples: {len(train_embeddings)}")
+    print(f"Val   samples: {len(val_embeddings)}")
+    print(f"Test  samples: {len(test_embeddings)}")
+    print(f"Classes:       {len(unique_labels)}")
+
+    # Build val DataLoader for per-epoch monitoring and early stopping
+    val_dataset = A3LISEmbeddingDataset(val_embeddings, val_labels, val_signers, label_to_idx)
+    val_loader = DataLoader(
+        val_dataset, batch_size=args.batch_size * 2, shuffle=False,
+        num_workers=args.num_workers, pin_memory=True
+    )
+
+    result = train_and_evaluate_fold(
+        fold=0,
+        train_embeddings=train_embeddings,
+        train_labels=train_labels,
+        train_signers=train_signers,
+        test_embeddings=test_embeddings,
+        test_labels=test_labels,
+        test_signers=test_signers,
+        label_to_idx=label_to_idx,
+        args=args,
+        device=device,
+        val_loader=val_loader,
+    )
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / 'standard_split_results.json', 'w') as f:
+        json.dump({
+            'label_language': args.label_language,
+            'result': result,
+            'hyperparameters': vars(args),
+        }, f, indent=2)
+    print(f"Results saved to {output_dir / 'standard_split_results.json'}")
+
+
+
 
 
 def main():
@@ -704,6 +655,11 @@ def main():
                        help='Directory containing precomputed embeddings')
     parser.add_argument('--output_dir', type=str, default='runs/smart_head',
                        help='Output directory for models and results')
+    parser.add_argument('--label_language', type=str, default='italian',
+                       choices=['italian', 'english'],
+                       help='Label language for A3LIS classes')
+    parser.add_argument('--use_categories', action='store_true', default=False,
+                       help='Use macro categories instead of micro sign labels')
     
     # Training
     parser.add_argument('--epochs', type=int, default=100,
@@ -736,9 +692,7 @@ def main():
     parser.add_argument('--ema_momentum', type=float, default=0.9998,
                        help='EMA momentum')
     
-    # Cross-validation
-    parser.add_argument('--fold', type=int, default=None,
-                       help='Run specific fold (0-9), or None for all folds')
+    # Early stopping
     parser.add_argument('--patience', type=int, default=10,
                        help='Early stopping patience (epochs without improvement). Set to 0 to disable.')
     
@@ -778,8 +732,8 @@ def main():
         print(f"  {key}: {value}")
     print(f"{'='*60}\n")
     
-    # Run LOSO cross-validation
-    run_loso_cross_validation(args.embeddings_dir, args, device)
+    # Run standard split training and evaluation
+    run_standard_split(args.embeddings_dir, args, device)
 
 
 if __name__ == '__main__':
