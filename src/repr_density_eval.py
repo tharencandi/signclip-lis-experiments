@@ -1,9 +1,9 @@
 """
-given an embeddings dir and model checkpoint, we
-use the sign density ratio (SDR) introduced in SignCL paper, 
+Given an embedding directory and model checkpoint, this script
+uses the Sign Density Ratio (SDR) introduced in the SignCL paper,
 
-which is a metric that combines the average inter-gloss distance, 
-and intra-gloss distance to quantify the density of rperesetnations for each gloss
+which combines average inter-gloss distance and intra-gloss distance
+to quantify the density of representations for each gloss.
 
 
 
@@ -46,7 +46,6 @@ The **average Sign Density Ratio (SDR)** across all glosses is calculated as
 
 import argparse
 from datetime import datetime
-import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
@@ -88,6 +87,9 @@ def compute_sdr(embeddings: np.ndarray, labels: List[str]) -> Tuple[Dict[str, fl
         if len(idx) < 2:
             sdr_per_gloss[gloss] = float('nan')
             continue
+        if len(other) == 0:
+            sdr_per_gloss[gloss] = float('nan')
+            continue
 
         # Intra: upper-triangle of the gloss×gloss sub-matrix
         intra_block = dist_matrix[np.ix_(idx, idx)]
@@ -107,6 +109,10 @@ def summarise_sdr(sdr_per_gloss: Dict[str, float], label: str = '') -> None:
     """Print summary statistics for an SDR distribution."""
     values = np.array([v for v in sdr_per_gloss.values() if not np.isnan(v)])
     tag = f" [{label}]" if label else ""
+    if len(values) == 0:
+        print(f"\nSDR summary{tag}  (n=0 glosses)")
+        print("  No valid SDR values available for summary.")
+        return
     print(f"\nSDR summary{tag}  (n={len(values)} glosses)")
     print(f"  mean ± std : {values.mean():.4f} ± {values.std():.4f}")
     print(f"  median     : {np.median(values):.4f}")
@@ -248,7 +254,7 @@ def main():
     )
     parser.add_argument(
         '--plot', type=Path, default=None,
-        help='Path to save distribution plot (omit to display interactively)'
+        help='Path to save distribution plot (default: auto-generated timestamped .png)'
     )
     args = parser.parse_args()
 
@@ -257,7 +263,7 @@ def main():
         args.embedding_dir, split=args.split, label_language='english'
     )
     print("computing SDR for primary model ...")
-    sdr_a, avg_a = compute_sdr(emb_a, labels_a)
+    sdr_a, _ = compute_sdr(emb_a, labels_a)
     print("Summary for primary model ...")
     summarise_sdr(sdr_a, label=args.label_a)
     top_k_analysis(sdr_a, k=args.top_k, label=args.label_a)
@@ -270,7 +276,7 @@ def main():
             args.compare_dir, split=args.split, label_language='english'
         )
         print("computing SDR for comparison model ...")
-        sdr_b, avg_b = compute_sdr(emb_b, labels_b)
+        sdr_b, _ = compute_sdr(emb_b, labels_b)
         print("Summary for comparison model ...")
         summarise_sdr(sdr_b, label=args.label_b)
         print("Comparison metrics ...")
