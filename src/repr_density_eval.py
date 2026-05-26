@@ -254,7 +254,7 @@ def main():
     )
     parser.add_argument(
         '--plot', type=Path, default=None,
-        help='Path to save distribution plot (default: auto-generated timestamped .png)'
+        help='Path to save distribution plot (always saved; if omitted, uses auto-generated timestamped .png)'
     )
     args = parser.parse_args()
 
@@ -263,9 +263,10 @@ def main():
         args.embedding_dir, split=args.split, label_language='english'
     )
     print("computing SDR for primary model ...")
-    sdr_a, _ = compute_sdr(emb_a, labels_a)
+    sdr_a, avg_a = compute_sdr(emb_a, labels_a)
     print("Summary for primary model ...")
     summarise_sdr(sdr_a, label=args.label_a)
+    print(f"Average SDR [{args.label_a}]: {avg_a:.4f}")
     top_k_analysis(sdr_a, k=args.top_k, label=args.label_a)
 
     sdr_dicts = {args.label_a: sdr_a}
@@ -276,9 +277,10 @@ def main():
             args.compare_dir, split=args.split, label_language='english'
         )
         print("computing SDR for comparison model ...")
-        sdr_b, _ = compute_sdr(emb_b, labels_b)
+        sdr_b, avg_b = compute_sdr(emb_b, labels_b)
         print("Summary for comparison model ...")
         summarise_sdr(sdr_b, label=args.label_b)
+        print(f"Average SDR [{args.label_b}]: {avg_b:.4f}")
         print("Comparison metrics ...")
         top_k_analysis(sdr_b, k=args.top_k, label=args.label_b)
         wilcoxon_compare(sdr_a, sdr_b, label_a=args.label_a, label_b=args.label_b)
