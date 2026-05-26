@@ -130,14 +130,23 @@ def wilcoxon_compare(
 
     a_vals = np.array([sdr_a[k] for k in common])
     b_vals = np.array([sdr_b[k] for k in common])
+    diffs = b_vals - a_vals
+    nonzero_diffs = diffs[diffs != 0]
+
+    if len(nonzero_diffs) == 0:
+        print(f"\nWilcoxon signed-rank test: {label_a} vs {label_b}  (n={len(common)} paired glosses)")
+        print("  statistic  : 0.0000")
+        print("  p-value    : 1")
+        print("  effect size (rank-biserial r): 0.0000")
+        print("  direction  : no difference; all paired SDR values are identical")
+        return
 
     stat, p = wilcoxon(a_vals, b_vals)
 
     # Rank-biserial correlation as effect size
-    diffs = b_vals - a_vals
-    ranks = rankdata(np.abs(diffs[diffs != 0]))
-    r_pos = ranks[diffs[diffs != 0] > 0].sum()
-    r_neg = ranks[diffs[diffs != 0] < 0].sum()
+    ranks = rankdata(np.abs(nonzero_diffs))
+    r_pos = ranks[nonzero_diffs > 0].sum()
+    r_neg = ranks[nonzero_diffs < 0].sum()
     n = len(ranks)
     rbc = (r_pos - r_neg) / (n * (n + 1) / 2)
 
