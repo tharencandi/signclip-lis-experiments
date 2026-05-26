@@ -21,14 +21,14 @@ Usage:
     
     # A3LIS with macro categories instead of micro labels
     python src/zero_shot.py \
-        --pose_embeddings_dir dataset/embeddings/a3lis_normalised \
+        --pose_embeddings_dir dataset/embeddings/a3lis_default_v2 \
         --split test \
         --use_categories \
         --prompt_type en_lis
     
     # A3LIS with custom template
     python src/zero_shot.py \
-        --pose_embeddings_dir dataset/embeddings/a3lis_normalised \
+        --pose_embeddings_dir dataset/embeddings/a3lis_default_v2 \
         --split test \
         --label_language italian \
         --text_template "Italian sign language: {}"

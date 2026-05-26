@@ -13,20 +13,20 @@ For A3LIS dataset:
 Usage:
     # Standard 70/30 split
     python src/few_shot.py \
-        --pose_embeddings_dir dataset/embeddings/a3lis_normalised \
+        --pose_embeddings_dir dataset/embeddings/a3lis_default_v2 \
         --method knn \
         --label_language english
 
     # LOSO cross-validation (10 folds, for fair comparison with Smart Head)
     python src/few_shot.py \
-        --pose_embeddings_dir dataset/embeddings/a3lis_normalised \
+        --pose_embeddings_dir dataset/embeddings/a3lis_default_v2 \
         --method knn \
         --label_language english \
         --loso
     
     # LOSO with specific fold
     python src/few_shot.py \
-        --pose_embeddings_dir dataset/embeddings/a3lis_normalised \
+        --pose_embeddings_dir dataset/embeddings/a3lis_default_v2 \
         --method svm \
         --loso \
         --fold 0
