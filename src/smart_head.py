@@ -600,9 +600,7 @@ def run_standard_split(
     test_signers = ['unknown'] * len(test_labels)
 
     # Build unified label index across all splits
-    all_split_labels = set(train_labels) | set(test_labels)
-    if args.train_split == 'train':
-        all_split_labels |= set(val_labels)
+    all_split_labels = set(train_labels) | set(val_labels) | set(test_labels)
     unique_labels = sorted(all_split_labels)
     label_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
 
