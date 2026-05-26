@@ -99,7 +99,8 @@ class A3LISTextProcessor:
     def __init__(self, label_map):
         self.label_map = label_map
     def __call__(self, label):
-        return self.label_map[label]
+        clean_label = label.replace("’", "'")
+        return self.label_map[clean_label]
 
 class A3LISAlignProcessor:
     def __init__(self, tokenizer, max_text_len=64, pretokenized_labels=None):
