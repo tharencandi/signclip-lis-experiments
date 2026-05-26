@@ -33,6 +33,30 @@ from signclip.utils.a3lis_paths import (
     PRETOKENIZED_LABELS_PATH,
 )
 
+class CrossModalSupConLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, video_features, text_features, labels):
+        # Calculate the standard similarity matrices
+        logits_per_video = video_features @ text_features.t()
+        logits_per_text = text_features @ video_features.t()
+
+        # Create a mask that is 1 where labels match, and 0 everywhere else
+        labels = labels.contiguous().view(-1, 1)
+        mask = torch.eq(labels, labels.T).float().to(video_features.device)
+
+        # Compute log-softmax for both directions
+        log_prob_video = F.log_softmax(logits_per_video, dim=1)
+        log_prob_text = F.log_softmax(logits_per_text, dim=1)
+
+        # Compute mean of log-likelihood over positive pairs
+        loss_v = -(mask * log_prob_video).sum(1) / mask.sum(1)
+        loss_t = -(mask * log_prob_text).sum(1) / mask.sum(1)
+
+        # Return the average of both directions
+        return (loss_v.mean() + loss_t.mean()) / 2
+
 
 class fineTuneA3LIS(RetriTask):
 
@@ -103,7 +127,8 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        self.nce_loss = MMContraLoss()
+        #self.nce_loss = MMContraLoss()
+        self.supcon_loss = CrossModalSupConLoss()
 
         max_text_len = getattr(config.dataset, 'max_len', 64)
 
@@ -212,6 +237,13 @@ class fineTuneA3LIS(RetriTask):
             return self.model.logit_scale.exp()
         return 14.28  # default: 1 / 0.07
 
+    # Original one, gemini says this:
+    # I am also fixing a tiny math bug in your original code here. 
+    # Your original code multiplied logit_scale into both embeddings 
+    # before passing them to the loss. When the loss takes the dot product, 
+    # that accidentally squares the temperature scale! 
+    # The standard way is to multiply the scale into the embeddings only once.
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         """Batch-local bidirectional NCE loss (MMContraLoss) + 147-class sim_matrix.
 
@@ -229,6 +261,27 @@ class fineTuneA3LIS(RetriTask):
 
         # 147-class sim_matrix for retrieval metrics only (logit_scale already baked in)
         sim_matrix = video_embeds @ text_embeds_all.t()  # [N x 147]
+        return sim_matrix, loss
+    '''
+    # For Supervised contrastive loss
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale       = self._get_logit_scale()
+        
+        # 1. Normalize the embeddings (do NOT multiply logit_scale here yet)
+        raw_video_embeds  = F.normalize(output["pooled_video"], p=2, dim=-1)
+        raw_text_embeds   = F.normalize(output["pooled_text"],  p=2, dim=-1)
+        text_embeds_all   = self.all_text_embeds.to(self.device)
+
+        # 2. Multiply by the scale just before passing to the loss
+        scaled_video = logit_scale * raw_video_embeds
+        scaled_text = logit_scale * raw_text_embeds
+
+        # 3. Calculate SupCon Loss using the labels!
+        loss = self.supcon_loss(scaled_video, scaled_text, label_tensor)
+
+        # 4. Compute 147-class sim_matrix for retrieval metrics
+        sim_matrix = scaled_video @ text_embeds_all.t()
+        
         return sim_matrix, loss
 
     def _retrieval_metrics(self, sim_matrix, label_tensor):
