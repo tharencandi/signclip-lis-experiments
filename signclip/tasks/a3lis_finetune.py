@@ -154,7 +154,7 @@ class fineTuneA3LIS(RetriTask):
         # BALANCED 4X4 BATCH SAMPLER
         if len(self.train_dataset) > 0:
             # Create the sampler (P=4 classes, K=4 instances = batch size of 16)
-            balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=4, n_samples=4)
+            balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=16, n_samples=2)
             
             self.train_data = DataLoader(
                 self.train_dataset,
