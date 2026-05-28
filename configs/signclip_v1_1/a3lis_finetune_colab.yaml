@@ -31,7 +31,7 @@ fairseq:
   common:
     fp16: true
     #tensorboard_logdir: /content/signclip-lis-experiments/runs/a3lis_finetune
-    tensorboard_logdir: /content/drive/MyDrive/signclip_a3lis_finetune/sup_con_loss
+    tensorboard_logdir: /content/drive/MyDrive/signclip_a3lis_finetune/sup_con_balanced_sampler
     log_interval: 1000
   dataset:
     num_workers: 2
@@ -53,7 +53,7 @@ fairseq:
     reset_optimizer: true
     reset_dataloader: true
     reset_meters: true
-    save_dir: /content/drive/MyDrive/signclip_a3lis_finetune/sup_con_loss
+    save_dir: /content/drive/MyDrive/signclip_a3lis_finetune/sup_con_balanced_sampler
     restore_file: /content/signclip-lis-experiments/pretrained_models/baseline_temporal_checkpoint_best.pt
 task_type: sweep_small
 model:

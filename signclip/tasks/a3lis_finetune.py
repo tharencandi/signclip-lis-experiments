@@ -26,6 +26,7 @@ from signclip.tasks.retritask import RetriTask
 from signclip.datasets.a3lis_dataset import A3LISDataset
 from signclip.utils.pose_utils import preprocess_pose, MAX_FRAMES
 from signclip.utils.metrics import compute_retrieval_metrics
+from signclip.utils.samplers import BalancedBatchSampler
 from signclip.utils.a3lis_paths import (
     POSES_ROOT,
     CSV_PATH,
@@ -150,6 +151,21 @@ class fineTuneA3LIS(RetriTask):
         batch_size = getattr(config.fairseq.dataset, 'batch_size', 16)
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
+        # BALANCED 4X4 BATCH SAMPLER
+        if len(self.train_dataset) > 0:
+            # Create the sampler (P=4 classes, K=4 instances = batch size of 16)
+            balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=4, n_samples=4)
+            
+            self.train_data = DataLoader(
+                self.train_dataset,
+                # NOTE: When using batch_sampler, you MUST remove batch_size, shuffle, and drop_last!
+                batch_sampler=balanced_sampler,
+                collate_fn=self.pose_collate_fn,
+                num_workers=num_workers,
+            )
+        else:
+            self.train_data = None
+        ''' STANDARD BATCHES
         if len(self.train_dataset) > 0:
             self.train_data = DataLoader(
                 self.train_dataset,
@@ -161,6 +177,7 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
+        '''
 
         self.val_data = DataLoader(
             self.val_dataset,
