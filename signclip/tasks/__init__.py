@@ -17,6 +17,11 @@ except ImportError:
     pass
 
 try:
+    from .a3lis_prolip_finetune import *
+except ImportError:
+    pass
+
+try:
     from .expretritask import *
 except ImportError:
     pass
