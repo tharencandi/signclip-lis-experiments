@@ -209,7 +209,7 @@ class fineTuneA3LISProLIP(RetriTask):
         return 14.28
 
     def _prolip_regularizer(self):
-        reg = 0.0
+        reg = next(self.projector.parameters()).new_zeros(())
         for name, param in self.projector.named_parameters():
             ref = self._projector_init[name].to(param.device)
             reg = reg + (param - ref).pow(2).sum()
@@ -235,6 +235,8 @@ class fineTuneA3LISProLIP(RetriTask):
     # ------------------------------------------------------------------
 
     def train_step_with_metrics(self, skip_backprop=False):
+        if self.train_data is None:
+            raise RuntimeError("train_data is None; check split config and training dataset paths")
         self.model.train()
         total_loss = 0.0
         total_ce = 0.0
@@ -286,6 +288,8 @@ class fineTuneA3LISProLIP(RetriTask):
         return avg_loss, r1, r5, r10, medianK
 
     def eval_with_metrics(self):
+        if self.val_data is None:
+            raise RuntimeError("val_data is None; check split config and validation dataset paths")
         self.model.eval()
         total_loss = 0.0
         all_ranks = []
