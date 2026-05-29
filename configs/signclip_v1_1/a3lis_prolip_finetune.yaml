@@ -31,18 +31,18 @@ fairseq:
     batch_size: 16
   optimization:
     lr:
-    - 2.0e-05
+    - 5.0e-05
     clip_norm: 1.0
     optimizer: adamw
     adam_betas: (0.9, 0.98)
     lr_scheduler: polynomial_decay
     total_num_update: 1000000
-    warmup_updates: 80
-    weight_decay: 0.001
+    warmup_updates: 50
+    weight_decay: 1.0e-04
     ddp_backend: no_c10d
-    max_epoch: 50
+    max_epoch: 100
     # ProLIP controls consumed by fineTuneA3LISProLIP
-    prolip_lambda: 2.0
+    prolip_lambda: 0.5
     prolip_lambda_mode: inv_n
   checkpoint:
     no_epoch_checkpoints: true
