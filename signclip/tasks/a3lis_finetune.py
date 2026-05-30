@@ -58,6 +58,40 @@ class CrossModalSupConLoss(nn.Module):
         # Return the average of both directions
         return (loss_v.mean() + loss_t.mean()) / 2
 
+class VideoSupConLoss(nn.Module):
+    def __init__(self, temperature=0.07):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, video_features, labels):
+        device = video_features.device
+        labels = labels.contiguous().view(-1, 1)
+        
+        mask = torch.eq(labels, labels.T).float().to(device)
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(video_features.size(0)).view(-1, 1).to(device),
+            0
+        )
+        mask = mask * logits_mask
+        
+        similarity_matrix = torch.matmul(video_features, video_features.T) / self.temperature
+        logits_max, _ = torch.max(similarity_matrix, dim=1, keepdim=True)
+        logits = similarity_matrix - logits_max.detach()
+        
+        exp_logits = torch.exp(logits) * logits_mask
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-6)
+        
+        sum_mask = mask.sum(1)
+        valid_anchors = sum_mask > 0 
+        
+        if not valid_anchors.any():
+            return torch.tensor(0.0, device=device)
+            
+        loss = -(mask * log_prob).sum(1)[valid_anchors] / sum_mask[valid_anchors]
+        return loss.mean()
+
 
 class fineTuneA3LIS(RetriTask):
 
@@ -128,8 +162,9 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        #self.nce_loss = MMContraLoss()
-        self.supcon_loss = CrossModalSupConLoss()
+        self.nce_loss = MMContraLoss()
+        self.supcon_loss = VideoSupConLoss(temperature = 0.07)
+        self.supcon_weight = 0.2
 
         max_text_len = getattr(config.dataset, 'max_len', 64)
 
@@ -151,7 +186,7 @@ class fineTuneA3LIS(RetriTask):
         batch_size = getattr(config.fairseq.dataset, 'batch_size', 16)
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
-        # BALANCED 4X4 BATCH SAMPLER
+        # BALANCED BATCH SAMPLER
         if len(self.train_dataset) > 0:
             # Create the sampler (P=4 classes, K=4 instances = batch size of 16)
             balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=16, n_samples=2)
@@ -165,7 +200,9 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
-        ''' STANDARD BATCHES
+        
+        # STANDARD BATCHES
+        '''
         if len(self.train_dataset) > 0:
             self.train_data = DataLoader(
                 self.train_dataset,
@@ -281,6 +318,7 @@ class fineTuneA3LIS(RetriTask):
         return sim_matrix, loss
     '''
     # For Supervised contrastive loss
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale       = self._get_logit_scale()
         
@@ -300,6 +338,33 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()
         
         return sim_matrix, loss
+    '''
+    # Original + SupCon as a regulizer term
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale       = self._get_logit_scale()
+        
+        # 1. Base L2 normalization
+        raw_video_embeds  = F.normalize(output["pooled_video"], p=2, dim=-1)
+        raw_text_embeds   = F.normalize(output["pooled_text"],  p=2, dim=-1)
+        text_embeds_all   = self.all_text_embeds.to(self.device)
+
+        # 2. Scale features for the multimodal NCE loss
+        scaled_video = logit_scale * raw_video_embeds
+        scaled_text  = logit_scale * raw_text_embeds
+
+        # Loss 1: Standard Text-to-Video Contrastive Loss
+        loss_nce = self.nce_loss(scaled_video, scaled_text)
+
+        # Loss 2: Video-to-Video Supervised Contrastive Regularizer 
+        loss_supcon = self.supcon_loss(raw_video_embeds, label_tensor)
+
+        # Blended Loss output
+        total_loss = loss_nce + (self.supcon_weight * loss_supcon)
+
+        # Compute 147-class similarity matrix for tracking evaluation metrics
+        sim_matrix = scaled_video @ text_embeds_all.t()
+        
+        return sim_matrix, total_loss
 
     def _retrieval_metrics(self, sim_matrix, label_tensor):
         return compute_retrieval_metrics(sim_matrix, label_tensor)
