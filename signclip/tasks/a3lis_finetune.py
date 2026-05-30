@@ -151,7 +151,8 @@ class fineTuneA3LIS(RetriTask):
         trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.model.parameters())
         print(f"Trainable parameters: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
-
+        # USED FOR EVERYTHING ELSE
+        '''
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
         lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
         weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
@@ -165,6 +166,27 @@ class fineTuneA3LIS(RetriTask):
         self.nce_loss = MMContraLoss()
         self.supcon_loss = VideoSupConLoss(temperature = 0.07)
         self.supcon_weight = 0.2
+
+        max_text_len = getattr(config.dataset, 'max_len', 64)
+        '''
+        # USED FOR CROSS-ENTROPY
+        opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
+        lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
+        weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
+        
+        # 1. Build the Classification Head (Assuming 512 is the SignCLIP video embedding dimension)
+        self.classifier_head = nn.Linear(512, 147).to(self.device)
+        self.ce_loss = nn.CrossEntropyLoss()
+        
+        # 2. Gather trainable parameters and ADD the new head to them!
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        trainable_params.extend(list(self.classifier_head.parameters()))
+        
+        # 3. Initialize Optimizer
+        if opt_name == 'adam':
+            self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+        else:
+            self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
         max_text_len = getattr(config.dataset, 'max_len', 64)
 
@@ -187,6 +209,7 @@ class fineTuneA3LIS(RetriTask):
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
         # BALANCED BATCH SAMPLER
+        '''
         if len(self.train_dataset) > 0:
             # Create the sampler (P=4 classes, K=4 instances = batch size of 16)
             balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=16, n_samples=2)
@@ -200,9 +223,8 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
-        
-        # STANDARD BATCHES
         '''
+        # STANDARD BATCHES
         if len(self.train_dataset) > 0:
             self.train_data = DataLoader(
                 self.train_dataset,
@@ -214,7 +236,7 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
-        '''
+        
 
         self.val_data = DataLoader(
             self.val_dataset,
@@ -340,6 +362,7 @@ class fineTuneA3LIS(RetriTask):
         return sim_matrix, loss
     '''
     # Original + SupCon as a regulizer term
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale       = self._get_logit_scale()
         
@@ -365,6 +388,22 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()
         
         return sim_matrix, total_loss
+    '''
+    # CROSS-ENTROPY
+    def _batch_nce_and_sim(self, output, label_tensor):
+        # 1. Get the raw video embedding
+        raw_video_embeds = output["pooled_video"] 
+        
+        # 2. Pass it through our new classification head to get the 147 bucket scores
+        logits = self.classifier_head(raw_video_embeds)
+        
+        # 3. Calculate standard Cross-Entropy Loss
+        loss = self.ce_loss(logits, label_tensor)
+        
+        # 4. Use the logits as the "similarity matrix" so the evaluation metrics still work
+        sim_matrix = logits
+        
+        return sim_matrix, loss
 
     def _retrieval_metrics(self, sim_matrix, label_tensor):
         return compute_retrieval_metrics(sim_matrix, label_tensor)
