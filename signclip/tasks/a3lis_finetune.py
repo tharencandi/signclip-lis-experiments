@@ -163,31 +163,48 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        self.nce_loss = MMContraLoss()
-        self.supcon_loss = VideoSupConLoss(temperature = 0.07)
-        self.supcon_weight = 0.2
+        self.nce_loss = MMContraLoss() # SignClip loss
+        #self.supcon_loss = VideoSupConLoss(temperature = 0.07)
+        #self.supcon_weight = 0.2
 
         max_text_len = getattr(config.dataset, 'max_len', 64)
         '''
         # USED FOR CROSS-ENTROPY
+        '''
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
         lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
         weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
-        
-        # 1. Build the Classification Head (Assuming 512 is the SignCLIP video embedding dimension)
+        # 1. Build the Classification Head (Assuming 768 is the SignCLIP video embedding dimension)
         self.classifier_head = nn.Linear(768, 149).to(self.device)
         self.ce_loss = nn.CrossEntropyLoss()
-        
         # 2. Gather trainable parameters and ADD the new head to them!
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         trainable_params.extend(list(self.classifier_head.parameters()))
-        
         # 3. Initialize Optimizer
         if opt_name == 'adam':
             self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
-
+        max_text_len = getattr(config.dataset, 'max_len', 64)
+        '''
+        # USED FOR SIGNCLIP LOSS + CROSS-ENTROPY
+        # 1. The Multimodal Text-Video Loss
+        self.nce_loss = MMContraLoss()
+        # 2. The Classification Head & Loss (768 embedding dim, 149 classes)
+        self.classifier_head = nn.Linear(768, 149).to(self.device)
+        self.ce_loss = nn.CrossEntropyLoss()
+        # 3. Define the blending weight (Keep NCE as the primary focus, CE as secondary)
+        self.ce_weight = 0.5  
+        # 4. Gather parameters and inject the new head
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        trainable_params.extend(list(self.classifier_head.parameters()))
+        opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
+        lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
+        weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
+        if opt_name == 'adam':
+            self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+        else:
+            self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
         max_text_len = getattr(config.dataset, 'max_len', 64)
 
         self.train_dataset = A3LISDataset(
@@ -390,6 +407,7 @@ class fineTuneA3LIS(RetriTask):
         return sim_matrix, total_loss
     '''
     # CROSS-ENTROPY
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         # 1. Get the raw video embedding
         raw_video_embeds = output["pooled_video"] 
@@ -404,6 +422,35 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = logits
         
         return sim_matrix, loss
+    '''
+    # Original signclip + cross-entropy
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale       = self._get_logit_scale()
+        
+        # --- TASK 1: MULTIMODAL ALIGNMENT (NCE) ---
+        # Normalize and scale the embeddings for the contrastive text mapping
+        raw_video_embeds  = F.normalize(output["pooled_video"], p=2, dim=-1)
+        raw_text_embeds   = F.normalize(output["pooled_text"],  p=2, dim=-1)
+        text_embeds_all   = self.all_text_embeds.to(self.device)
+
+        scaled_video = logit_scale * raw_video_embeds
+        scaled_text  = logit_scale * raw_text_embeds
+
+        loss_nce = self.nce_loss(scaled_video, scaled_text)
+
+        # --- TASK 2: LINEAR SEPARABILITY (CE) ---
+        # Pass the unnormalized video features into the classification head
+        logits = self.classifier_head(output["pooled_video"])
+        loss_ce = self.ce_loss(logits, label_tensor)
+
+        # --- COMBINE ---
+        total_loss = loss_nce + (self.ce_weight * loss_ce)
+
+        # CRITICAL: Return the Multimodal sim_matrix (Video vs Text)
+        # so the evaluation metrics track true Direct Retrieval accuracy!
+        sim_matrix = scaled_video @ text_embeds_all.t()
+        
+        return sim_matrix, total_loss
 
     def _retrieval_metrics(self, sim_matrix, label_tensor):
         return compute_retrieval_metrics(sim_matrix, label_tensor)
