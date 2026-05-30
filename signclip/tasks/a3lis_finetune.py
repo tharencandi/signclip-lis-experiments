@@ -175,7 +175,7 @@ class fineTuneA3LIS(RetriTask):
         weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
         
         # 1. Build the Classification Head (Assuming 512 is the SignCLIP video embedding dimension)
-        self.classifier_head = nn.Linear(512, 147).to(self.device)
+        self.classifier_head = nn.Linear(768, 149).to(self.device)
         self.ce_loss = nn.CrossEntropyLoss()
         
         # 2. Gather trainable parameters and ADD the new head to them!
