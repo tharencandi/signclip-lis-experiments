@@ -28,6 +28,8 @@ import torch
 import numpy as np
 from pose_format import Pose
 from signclip.models import MMPTModel
+from signclip.tasks.task import Task
+from signclip.utils.load_config import load_config
 from signclip.utils.pose_utils import (
     FACEMESH_CONTOURS_POINTS,
     MAX_FRAMES as MAX_FRAMES_DEFAULT,
@@ -49,8 +51,7 @@ model_configs = [
 # Checkpoint and base config for the A3LIS fine-tuned model.
 # The fine-tuned weights are overlaid on the same architecture as 'default'.
 A3LIS_FINETUNE_CHECKPOINT = "runs/signclip_a3lis_finetune/checkpoint_best.pt"
-A3LIS_FINETUNE_BASE_CONFIG = "runs/signclip_a3lis_prolip_finetune/checkpoint_best.pt"  
-A3LIS_FINETUNE_BASE_CONFIG = "signclip_v1_1/baseline_temporal"
+A3LIS_FINETUNE_BASE_CONFIG = "projects/retri/signclip_v1_1/baseline_temporal.yaml"
 
 # Cache for models that have been lazily initialized.
 models = {}
@@ -66,6 +67,25 @@ def _load_checkpoint_into_model(model, checkpoint_path, model_name):
         print(f"[{model_name}] Warning: {len(missing)} missing keys in checkpoint")
     if unexpected:
         print(f"[{model_name}] Warning: {len(unexpected)} unexpected keys in checkpoint")
+
+
+def _build_model_from_config(config_path):
+    config = load_config(config_file=config_path)
+    mmtask = Task.config_task(config)
+    model = MMPTModel(config, mmtask.build_model(), None)
+
+    from transformers import AutoTokenizer
+    from omegaconf import OmegaConf
+    use_fast = OmegaConf.select(config.dataset, 'use_fast')
+    if use_fast is None:
+        use_fast = False
+    tokenizer = AutoTokenizer.from_pretrained(
+        str(config.dataset.bert_name), use_fast=use_fast
+    )
+
+    from signclip.processors import Aligner
+    aligner = Aligner(config.dataset)
+    return model, tokenizer, aligner
 
 def get_model(model_name, checkpoint_path=None):
     """
@@ -100,11 +120,7 @@ def get_model(model_name, checkpoint_path=None):
                 f"Fine-tuned A3LIS checkpoint not found: {ckpt_path}\n"
                 f"Run scripts/run_finetune.py first to produce the checkpoint."
             )
-        base_config = A3LIS_FINETUNE_BASE_CONFIG
-        model, tokenizer, aligner = MMPTModel.from_pretrained(
-            f"{base_config}.yaml",
-            video_encoder='',
-        )
+        model, tokenizer, aligner = _build_model_from_config(A3LIS_FINETUNE_BASE_CONFIG)
         _load_checkpoint_into_model(model, ckpt_path, model_name)
     else:
         # Standard YAML-based model loading.
