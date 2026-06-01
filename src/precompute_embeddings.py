@@ -18,7 +18,7 @@ Usage:
         --model_name default
     
     # A3LIS dataset WITHOUT normalisation (raw embeddings)
-    python src/precompute_normalised_embeddings.py \
+    python src/precompute_embeddings.py \
         --dataset_root dataset/A3LIS_dataset_poses \
         --output_dir dataset/embeddings/a3lis_raw \
         --no-normalize \
@@ -132,6 +132,7 @@ def precompute_normalised_embeddings(
     pose_dir: str,
     output_dir: str,
     model_name: str = 'default',
+    checkpoint_path: Optional[str] = None,
     normalize: bool = True,
     remove_redundant: bool = True,
     anonymize: bool = True,
@@ -144,6 +145,7 @@ def precompute_normalised_embeddings(
         pose_dir: Directory containing original .pose files (legacy mode)
         output_dir: Directory to save embeddings
         model_name: SignCLIP model to use
+        checkpoint_path: Optional checkpoint override (used with model_name=a3lis_finetune)
         normalize: Apply normalization (if False, use raw poses)
         remove_redundant: Remove redundant keypoints (E6) - only if normalize=True
         anonymize: Apply first-frame anonymization (E6.2) - only if normalize=True
@@ -224,6 +226,8 @@ def precompute_normalised_embeddings(
         print(f"Normalization: DISABLED (using raw poses)")
     print(f"Output directory: {output_dir}")
     print(f"Model: {model_name}\n")
+    if checkpoint_path:
+        print(f"Checkpoint override: {checkpoint_path}\n")
     
     # Process each pose file
     success_count = 0
@@ -251,7 +255,11 @@ def precompute_normalised_embeddings(
         
         try:
             # Compute embedding from pose
-            embedding = embed_pose(pose, model_name=model_name)
+            embedding = embed_pose(
+                pose,
+                model_name=model_name,
+                checkpoint_path=checkpoint_path,
+            )
             
             # Save embedding
             np.save(embedding_file, embedding)
@@ -289,6 +297,7 @@ def precompute_normalised_embeddings(
         with open(metadata_file, 'w', encoding='utf-8') as f:
             json.dump({
                 'model_name': model_name,
+                'checkpoint_path': checkpoint_path,
                 'normalization': {
                     'enabled': normalize,
                     'shoulder_based': normalize,
@@ -355,6 +364,14 @@ def main():
         choices=['default', 'asl_citizen', 'asl_finetune', 'suisse', 'a3lis_finetune'],
         help='SignCLIP model to use (a3lis_finetune loads from runs/signclip_a3lis_finetune/best_checkpoint.pt)'
     )
+
+    parser.add_argument(
+        '--checkpoint_path',
+        type=str,
+        default=None,
+        help='Optional checkpoint override for model loading. '
+             'Most useful with --model_name a3lis_finetune.'
+    )
     
     # Normalization control
     normalize_group = parser.add_mutually_exclusive_group()
@@ -392,6 +409,7 @@ def main():
         pose_dir=args.pose_dir or '',
         output_dir=args.output_dir,
         model_name=args.model_name,
+        checkpoint_path=args.checkpoint_path,
         normalize=normalize,
         remove_redundant=not args.no_remove_redundant,
         anonymize=not args.no_anonymize,

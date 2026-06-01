@@ -49,19 +49,33 @@ model_configs = [
 # Checkpoint and base config for the A3LIS fine-tuned model.
 # The fine-tuned weights are overlaid on the same architecture as 'default'.
 A3LIS_FINETUNE_CHECKPOINT = "runs/signclip_a3lis_finetune/checkpoint_best.pt"
+A3LIS_FINETUNE_BASE_CONFIG = "runs/signclip_a3lis_prolip_finetune/checkpoint_best.pt"  
 A3LIS_FINETUNE_BASE_CONFIG = "signclip_v1_1/baseline_temporal"
 
 # Cache for models that have been lazily initialized.
 models = {}
 
-def get_model(model_name):
+
+def _load_checkpoint_into_model(model, checkpoint_path, model_name):
+    state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    sd = state.get('model_state_dict', state)
+    if not any(k.startswith('model.') for k in sd):
+        sd = {f'model.{k}': v for k, v in sd.items()}
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    if missing:
+        print(f"[{model_name}] Warning: {len(missing)} missing keys in checkpoint")
+    if unexpected:
+        print(f"[{model_name}] Warning: {len(unexpected)} unexpected keys in checkpoint")
+
+def get_model(model_name, checkpoint_path=None):
     """
     Lazily load the requested model based on model_name.
     If the model is already loaded, return it.
     Otherwise, find its config, load it, and cache it.
     """
-    if model_name in models:
-        return models[model_name]
+    cache_key = (model_name, str(checkpoint_path) if checkpoint_path else None)
+    if cache_key in models:
+        return models[cache_key]
 
     # Look up the configuration for the given model_name.
     config_path = None
@@ -74,33 +88,29 @@ def get_model(model_name):
     if not found:
         raise ValueError(f"Unknown model name: {model_name}")
 
-    if model_name == 'a3lis_finetune':
-        # Load base architecture (same as 'default') then overlay fine-tuned weights.
-        ckpt_path = Path(A3LIS_FINETUNE_CHECKPOINT)
+    if model_name == 'a3lis_finetune' or checkpoint_path:
+        # Load base architecture then overlay the requested checkpoint.
+        if model_name == 'a3lis_finetune' and checkpoint_path is None:
+            ckpt_path = Path(A3LIS_FINETUNE_CHECKPOINT)
+        else:
+            assert checkpoint_path is not None, "checkpoint_path is required when overriding the model checkpoint"
+            ckpt_path = Path(checkpoint_path)
         if not ckpt_path.exists():
             raise FileNotFoundError(
                 f"Fine-tuned A3LIS checkpoint not found: {ckpt_path}\n"
                 f"Run scripts/run_finetune.py first to produce the checkpoint."
             )
+        base_config = A3LIS_FINETUNE_BASE_CONFIG
         model, tokenizer, aligner = MMPTModel.from_pretrained(
-            f"projects/retri/{A3LIS_FINETUNE_BASE_CONFIG}.yaml",
-            video_encoder=None,
+            f"{base_config}.yaml",
+            video_encoder='',
         )
-        state = torch.load(ckpt_path, map_location='cpu', weights_only=False)
-        sd = state.get('model_state_dict', state)
-        # Checkpoint was saved from finetuner.model (MMFusionSeparate), with keys like
-        # 'text_encoder.*', 'video_encoder.*'.  MMPTModel wraps that under 'model.*',
-        # so prepend the prefix before loading.
-        if not any(k.startswith('model.') for k in sd):
-            sd = {f'model.{k}': v for k, v in sd.items()}
-        missing, unexpected = model.load_state_dict(sd, strict=False)
-        if missing:
-            print(f"[a3lis_finetune] Warning: {len(missing)} missing keys in checkpoint")
+        _load_checkpoint_into_model(model, ckpt_path, model_name)
     else:
         # Standard YAML-based model loading.
         model, tokenizer, aligner = MMPTModel.from_pretrained(
             f"projects/retri/{config_path}.yaml",
-            video_encoder=None,
+            video_encoder='',
         )
 
     model.eval()
@@ -108,16 +118,16 @@ def get_model(model_name):
     if torch.cuda.is_available():
         model.cuda()
 
-    models[model_name] = {
+    models[cache_key] = {
         "model": model,
         "tokenizer": tokenizer,
         "aligner": aligner,
     }
-    return models[model_name]
+    return models[cache_key]
 
 
-def preprocess_text(text, model_name="default"):
-    model_info = get_model(model_name)
+def preprocess_text(text, model_name="default", checkpoint_path=None):
+    model_info = get_model(model_name, checkpoint_path=checkpoint_path)
     aligner = model_info["aligner"]
     tokenizer = model_info["tokenizer"]
 
@@ -129,11 +139,11 @@ def preprocess_text(text, model_name="default"):
     return caps, cmasks
 
 
-def embed_pose(pose, model_name='default'):
-    model_info = get_model(model_name)
+def embed_pose(pose, model_name='default', checkpoint_path=None):
+    model_info = get_model(model_name, checkpoint_path=checkpoint_path)
     model = model_info['model']
 
-    caps, cmasks = preprocess_text('', model_name)
+    caps, cmasks = preprocess_text('', model_name, checkpoint_path=checkpoint_path)
     poses = pose if type(pose) == list else [pose]
     embeddings = []
 
@@ -172,8 +182,8 @@ def embed_pose(pose, model_name='default'):
     return np.concatenate(embeddings)
 
 
-def embed_text(text, model_name='default'):
-    model_info = get_model(model_name)
+def embed_text(text, model_name='default', checkpoint_path=None):
+    model_info = get_model(model_name, checkpoint_path=checkpoint_path)
     model = model_info['model']
     
     # Determine the placeholder dimension based on the model_name.
@@ -192,7 +202,7 @@ def embed_text(text, model_name='default'):
     caps_list = []
     cmasks_list = []
     for t in texts:
-        caps, cmasks = preprocess_text(t, model_name)
+        caps, cmasks = preprocess_text(t, model_name, checkpoint_path=checkpoint_path)
         caps_list.append(caps)   # Each should have shape (1, 128)
         cmasks_list.append(cmasks)
 
@@ -216,7 +226,10 @@ def score_pose_and_text(pose, text, model_name="default", max_frames=None):
     model_info = get_model(model_name)
     model = model_info["model"]
 
-    pose_frames = preprocess_pose(pose, max_frames)
+    pose_frames = preprocess_pose(
+        pose,
+        MAX_FRAMES_DEFAULT if max_frames is None else max_frames,
+    )
     caps, cmasks = preprocess_text(text, model_name)
 
     with torch.no_grad():

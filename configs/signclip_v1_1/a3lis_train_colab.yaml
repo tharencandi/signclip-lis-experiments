@@ -1,0 +1,69 @@
+# SignCLIP A3LIS Scratch Training - Colab Configuration
+#
+# Designed for Google Colab with the repo cloned to:
+#   /content/signclip-lis-experiments/
+#
+# Checkpoints are saved to Google Drive:
+#   /content/drive/MyDrive/signclip_a3lis_train/
+#
+# Usage: pass this config to scripts/run_a3lis_train.py
+
+dataset:
+  max_video_len: 256
+  max_len: 64
+  meta_processor: SignCLIPPretrainMetaProcessor
+  video_processor: PoseProcessor
+  text_processor: TextProcessor
+  bert_name: bert-base-cased
+  test_path: /content/signclip-lis-experiments/runs/a3lis_train/dummy_test.txt
+  val_path: /content/signclip-lis-experiments/runs/a3lis_train/dummy_val.txt
+  train_path: /content/signclip-lis-experiments/runs/a3lis_train/dummy_train.txt
+  metadata_path: /content/signclip-lis-experiments/runs/a3lis_train/dummy_metadata.csv
+  vfeat_dir: /content/signclip-lis-experiments/runs/a3lis_train
+  aligner: DSAligner
+  pose_components: 'reduced_face'
+  augment_temporal: true
+
+fairseq:
+  common:
+    fp16: true
+    tensorboard_logdir: /content/signclip-lis-experiments/runs/a3lis_train
+    log_interval: 1000
+  dataset:
+    num_workers: 2
+    batch_size: 64
+  optimization:
+    lr:
+    - 1.0e-04
+    clip_norm: 2.0
+    optimizer: adamw
+    adam_betas: (0.9, 0.98)
+    lr_scheduler: polynomial_decay
+    total_num_update: 1000000
+    warmup_updates: 1000
+    weight_decay: 0.01
+    ddp_backend: no_c10d
+    max_epoch: 150
+  checkpoint:
+    no_epoch_checkpoints: true
+    reset_optimizer: true
+    reset_dataloader: true
+    reset_meters: true
+    save_dir: /content/drive/MyDrive/signclip_a3lis_train
+    restore_file: null
+
+task_type: sweep_small
+
+model:
+  model_cls: MMFusionSeparate
+  mm_encoder_cls: null
+  video_encoder_cls: MMBertForEncoder
+  text_encoder_cls: BertModel
+  num_hidden_video_layers: 12
+  vfeat_dim: 609
+
+loss:
+  loss_cls: MMContraLoss
+
+eval:
+  save_path: /content/drive/MyDrive/signclip_a3lis_train
