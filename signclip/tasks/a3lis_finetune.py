@@ -188,6 +188,7 @@ class fineTuneA3LIS(RetriTask):
         max_text_len = getattr(config.dataset, 'max_len', 64)
         '''
         # USED FOR SIGNCLIP LOSS + CROSS-ENTROPY
+        '''
         # 1. The Multimodal Text-Video Loss
         self.nce_loss = MMContraLoss()
         # 2. The Classification Head & Loss (768 embedding dim, 149 classes)
@@ -201,6 +202,20 @@ class fineTuneA3LIS(RetriTask):
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
         lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
         weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
+        if opt_name == 'adam':
+            self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+        else:
+            self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
+        max_text_len = getattr(config.dataset, 'max_len', 64)
+        '''
+
+        # USED FOR GLOBAL NCE
+        # Remove all external loss initializations (no MMContraLoss, no CE head)
+        opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
+        lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
+        weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
+        # Gather only the standard model parameters
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         if opt_name == 'adam':
             self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
         else:
@@ -424,6 +439,7 @@ class fineTuneA3LIS(RetriTask):
         return sim_matrix, loss
     '''
     # Original signclip + cross-entropy
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale       = self._get_logit_scale()
         
@@ -451,6 +467,24 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()
         
         return sim_matrix, total_loss
+    '''
+    # Global NCE
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale = self._get_logit_scale()
+        
+        # 1. L2 Normalize both modalities
+        raw_video_embeds = F.normalize(output["pooled_video"], p=2, dim=-1)
+        text_embeds_all  = self.all_text_embeds.to(self.device)
+
+        # 2. Scale the video and compute Global Logits against ALL 149 classes
+        scaled_video = logit_scale * raw_video_embeds
+        global_logits = scaled_video @ text_embeds_all.t()  # Shape: [16, 149]
+
+        # 3. Global NCE Loss
+        loss_nce = F.cross_entropy(global_logits, label_tensor)
+        
+        # Return the global_logits as the sim_matrix so metrics are calculated perfectly
+        return global_logits, loss_nce
 
     def _retrieval_metrics(self, sim_matrix, label_tensor):
         return compute_retrieval_metrics(sim_matrix, label_tensor)
