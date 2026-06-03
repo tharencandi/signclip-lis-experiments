@@ -210,6 +210,7 @@ class fineTuneA3LIS(RetriTask):
         '''
 
         # USED FOR GLOBAL NCE
+        '''
         # Remove all external loss initializations (no MMContraLoss, no CE head)
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
         lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
@@ -220,6 +221,21 @@ class fineTuneA3LIS(RetriTask):
             self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
+        max_text_len = getattr(config.dataset, 'max_len', 64)
+        '''
+
+        # USED FOR GLOBAL NCE + DECOUPLED SUP-CON
+        opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
+        lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
+        weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
+        # Gather only the standard model parameters
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        if opt_name == 'adam':
+            self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+        else:
+            self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
+        # The alpha weight for Decoupled SupCon (Default 0.5 per the paper)
+        self.dcl_weight = 0.5
         max_text_len = getattr(config.dataset, 'max_len', 64)
 
         self.train_dataset = A3LISDataset(
@@ -241,10 +257,10 @@ class fineTuneA3LIS(RetriTask):
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
         # BALANCED BATCH SAMPLER
-        '''
+        
         if len(self.train_dataset) > 0:
             # Create the sampler (P=4 classes, K=4 instances = batch size of 16)
-            balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=16, n_samples=2)
+            balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=8, n_samples=2)
             
             self.train_data = DataLoader(
                 self.train_dataset,
@@ -255,8 +271,9 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
-        '''
+        
         # STANDARD BATCHES
+        '''
         if len(self.train_dataset) > 0:
             self.train_data = DataLoader(
                 self.train_dataset,
@@ -268,6 +285,7 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
+        '''
         
 
         self.val_data = DataLoader(
@@ -469,6 +487,7 @@ class fineTuneA3LIS(RetriTask):
         return sim_matrix, total_loss
     '''
     # Global NCE
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale = self._get_logit_scale()
         
@@ -485,6 +504,69 @@ class fineTuneA3LIS(RetriTask):
         
         # Return the global_logits as the sim_matrix so metrics are calculated perfectly
         return global_logits, loss_nce
+    '''
+
+    # Global NCE + Decoupled Sup-Con
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale = self._get_logit_scale()
+        device = output["pooled_video"].device
+        
+        # 1. Normalize embeddings
+        raw_video = F.normalize(output["pooled_video"], p=2, dim=-1)
+        text_embeds_all = self.all_text_embeds.to(device)
+
+        # ==========================================
+        # LOSS 1: GLOBAL NCE (Text-to-Video Alignment)
+        # ==========================================
+        scaled_video = logit_scale * raw_video
+        global_logits = scaled_video @ text_embeds_all.t()
+        loss_nce = F.cross_entropy(global_logits, label_tensor)
+
+        # ==========================================
+        # LOSS 2: DECOUPLED SUPCON (DCL)
+        # ==========================================
+        labels = label_tensor.contiguous().view(-1, 1)
+        mask = torch.eq(labels, labels.T).float()
+        
+        # self_mask: 1 on diagonal (the video itself)
+        self_mask = torch.eye(labels.shape[0], device=device)
+        
+        # pos_mask (P_i): Same class, excluding self
+        pos_mask = mask - self_mask
+        
+        # neg_mask: Different classes ONLY (The "Decoupled" magic!)
+        neg_mask = 1.0 - mask
+        
+        # Base similarity matrix scaled by temperature (tau=0.07)
+        tau = 0.07 
+        sim_matrix = torch.matmul(raw_video, raw_video.T) / tau
+        
+        # Denominator: Sum of exp over NEGATIVES only
+        exp_sim = torch.exp(sim_matrix) * neg_mask
+        denominator = exp_sim.sum(dim=1, keepdim=True)
+        
+        # Log Prob: <v_i, v_p> - log(denominator)
+        log_prob = sim_matrix - torch.log(denominator + 1e-6)
+        
+        # Mean over positive pairs
+        sum_pos = pos_mask.sum(dim=1)
+        valid_anchors = sum_pos > 0
+        
+        if valid_anchors.any():
+            loss_dcl = -(pos_mask * log_prob).sum(dim=1)[valid_anchors] / sum_pos[valid_anchors]
+            loss_dcl = loss_dcl.mean()
+        else:
+            loss_dcl = torch.tensor(0.0, device=device)
+
+        # ==========================================
+        # COMBINED OBJECTIVE
+        # ==========================================
+        total_loss = loss_nce + (self.dcl_weight * loss_dcl)
+
+        # Return global_logits as sim_matrix for perfect metric tracking
+        return global_logits, total_loss
+
+
 
     def _retrieval_metrics(self, sim_matrix, label_tensor):
         return compute_retrieval_metrics(sim_matrix, label_tensor)
