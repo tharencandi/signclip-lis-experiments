@@ -43,7 +43,7 @@ fairseq:
     warmup_updates: 50
     weight_decay: 1.0e-04
     ddp_backend: no_c10d
-    max_epoch: 100
+    max_epoch: 50
     # ProLIP controls consumed by fineTuneA3LISProLIP
     prolip_lambda: 0.5
     prolip_lambda_mode: inv_n
