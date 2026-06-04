@@ -266,7 +266,7 @@ class fineTuneA3LIS(RetriTask):
                 self.train_dataset,
                 # NOTE: When using batch_sampler, you MUST remove batch_size, shuffle, and drop_last!
                 batch_sampler=balanced_sampler,
-                collate_fn=self.pose_collate_fn,
+                collate_fn=self.train_pose_collate_fn,
                 num_workers=num_workers,
             )
         else:
@@ -279,7 +279,7 @@ class fineTuneA3LIS(RetriTask):
                 self.train_dataset,
                 batch_size=batch_size,
                 shuffle=True,
-                collate_fn=self.pose_collate_fn,
+                collate_fn=self.train_pose_collate_fn,
                 num_workers=num_workers,
                 drop_last=False
             )
@@ -292,7 +292,7 @@ class fineTuneA3LIS(RetriTask):
             self.val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            collate_fn=self.pose_collate_fn,
+            collate_fn=self.val_pose_collate_fn,
             num_workers=num_workers
         ) if len(self.val_dataset) > 0 else None
 
@@ -678,7 +678,13 @@ class fineTuneA3LIS(RetriTask):
     # DataLoader utilities
     # ------------------------------------------------------------------
 
-    def pose_collate_fn(self, batch):
+    def train_pose_collate_fn(self, batch):
+        return self.pose_collate_fn(batch, augment=True)
+
+    def val_pose_collate_fn(self, batch):
+        return self.pose_collate_fn(batch, augment=False)
+
+    def pose_collate_fn(self, batch, augment=False):
         if len(batch) == 0:
             return {
                 'pose':   torch.empty(0),
@@ -692,7 +698,7 @@ class fineTuneA3LIS(RetriTask):
             # Use the canonical preprocessing pipeline (shoulder normalisation,
             # face-contour filtering, leg hiding, NaN→0) so that fine-tuning
             # and inference receive the same input distribution.
-            p = preprocess_pose(item['pose'], max_frames=MAX_FRAMES)[0]  # (T, 609)
+            p = preprocess_pose(item['pose'], max_frames=MAX_FRAMES, augment=augment)[0]  # (T, 609)
             poses.append(p)
             lengths.append(p.shape[0])
 

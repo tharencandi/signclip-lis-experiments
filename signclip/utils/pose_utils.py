@@ -11,9 +11,10 @@ so that fine-tuning and inference see the same input distribution.
 """
 
 import numpy as np
+import random
 import torch
+import torch.nn.functional as F
 from pose_format import Pose
-
 # ---------------------------------------------------------------------------
 # Face mesh contour landmark indices (avoids importing mediapipe at runtime).
 # Generated from: sorted(set(p for tup in mp_holistic.FACEMESH_CONTOURS for p in tup))
@@ -72,7 +73,7 @@ def pose_hide_legs(pose):
     raise ValueError("Unknown pose header schema for hiding legs")
 
 
-def preprocess_pose(pose: Pose, max_frames: int = None) -> torch.Tensor:
+def preprocess_pose(pose: Pose, max_frames: int = None, augment: bool = False) -> torch.Tensor:
     """Apply the full SignCLIP preprocessing pipeline to a raw Pose object.
 
     Steps (identical to pretraining):
@@ -111,3 +112,37 @@ def preprocess_pose(pose: Pose, max_frames: int = None) -> torch.Tensor:
         pose_frames = pose_frames[:, :max_frames, :]
 
     return pose_frames
+
+def temporal_augmentation(pose_frames, sigma=0.2):
+    """
+    Applies temporal augmentation by scaling the sequence length.
+    pose_frames: Tensor of shape (1, T, 609)
+    sigma: Standard deviation for the scaling factor.
+    """
+    # 1. Draw a random scaling factor from a Gaussian distribution (mean=1.0)
+    scale_factor = random.gauss(1.0, sigma)
+    
+    # Clamp to reasonable bounds (prevent infinite stretching or collapsing to 0)
+    scale_factor = max(0.5, min(2.0, scale_factor))
+    
+    T = pose_frames.size(1)
+    new_T = int(T * scale_factor)
+    
+    # If the sequence becomes too short or essentially unchanged, skip
+    if new_T <= 1 or new_T == T:
+        return pose_frames
+        
+    # 2. PyTorch interpolate needs [Batch, Channels, Time], so we swap T and 609
+    # From [1, T, 609] -> [1, 609, T]
+    pose_permuted = pose_frames.permute(0, 2, 1)
+    
+    # 3. Apply 1D linear interpolation to stretch/compress the sequence
+    pose_interpolated = F.interpolate(
+        pose_permuted, 
+        size=new_T, 
+        mode='linear', 
+        align_corners=False
+    )
+    
+    # 4. Swap back to [1, new_T, 609]
+    return pose_interpolated.permute(0, 2, 1)
