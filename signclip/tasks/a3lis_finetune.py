@@ -259,7 +259,7 @@ class fineTuneA3LIS(RetriTask):
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
         # BALANCED BATCH SAMPLER
-        
+        '''
         if len(self.train_dataset) > 0:
             # Create the sampler (P=4 classes, K=4 instances = batch size of 16)
             balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=8, n_samples=2)
@@ -273,9 +273,9 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
-        
-        # STANDARD BATCHES
         '''
+        # STANDARD BATCHES
+        
         if len(self.train_dataset) > 0:
             self.train_data = DataLoader(
                 self.train_dataset,
@@ -287,7 +287,7 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
-        '''
+        
         
 
         self.val_data = DataLoader(
