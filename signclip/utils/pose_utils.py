@@ -116,42 +116,6 @@ def preprocess_pose(pose: Pose, max_frames: int = None, augment: bool = False) -
 
     return pose_frames
 
-"""
-def temporal_augmentation(pose_frames, sigma=0.2):
-    
-    # Applies temporal augmentation by scaling the sequence length.
-    # pose_frames: Tensor of shape (1, T, 609)
-    # sigma: Standard deviation for the scaling factor.
-    
-    # 1. Draw a random scaling factor from a Gaussian distribution (mean=1.0)
-    scale_factor = random.gauss(1.0, sigma)
-    
-    # Clamp to reasonable bounds (prevent infinite stretching or collapsing to 0)
-    scale_factor = max(0.5, min(2.0, scale_factor))
-    
-    T = pose_frames.size(1)
-    new_T = int(T * scale_factor)
-    
-    # If the sequence becomes too short or essentially unchanged, skip
-    if new_T <= 1 or new_T == T:
-        return pose_frames
-        
-    # 2. PyTorch interpolate needs [Batch, Channels, Time], so we swap T and 609
-    # From [1, T, 609] -> [1, 609, T]
-    pose_permuted = pose_frames.permute(0, 2, 1)
-    
-    # 3. Apply 1D linear interpolation to stretch/compress the sequence
-    pose_interpolated = F.interpolate(
-        pose_permuted, 
-        size=new_T, 
-        mode='linear', 
-        align_corners=False
-    )
-    
-    # 4. Swap back to [1, new_T, 609]
-    return pose_interpolated.permute(0, 2, 1)
-"""
-
 def apply_augmentations(pose_frames, sigma_temporal=0.2, p_flip=0.2, sigma_spatial=0.2, sigma_noise=0.001):
     """
     Applies the full SignCLIP augmentation stack sequentially to a (1, T, 609) tensor.
