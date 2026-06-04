@@ -11,9 +11,10 @@ so that fine-tuning and inference see the same input distribution.
 """
 
 import numpy as np
+import random
 import torch
+import torch.nn.functional as F
 from pose_format import Pose
-
 # ---------------------------------------------------------------------------
 # Face mesh contour landmark indices (avoids importing mediapipe at runtime).
 # Generated from: sorted(set(p for tup in mp_holistic.FACEMESH_CONTOURS for p in tup))
@@ -72,7 +73,7 @@ def pose_hide_legs(pose):
     raise ValueError("Unknown pose header schema for hiding legs")
 
 
-def preprocess_pose(pose: Pose, max_frames: int = None) -> torch.Tensor:
+def preprocess_pose(pose: Pose, max_frames: int = None, augment: bool = False) -> torch.Tensor:
     """Apply the full SignCLIP preprocessing pipeline to a raw Pose object.
 
     Steps (identical to pretraining):
@@ -103,11 +104,66 @@ def preprocess_pose(pose: Pose, max_frames: int = None) -> torch.Tensor:
 
     pose_frames = torch.from_numpy(np.expand_dims(feat, axis=0)).float()  # (1, T, 609)
 
+    if augment:
+        pose_frames = apply_augmentations(pose_frames)
+
     if max_frames is not None and pose_frames.size(1) > max_frames:
         print(
             f"pose sequence length too long ({pose_frames.size(1)}) "
             f"longer than {max_frames} frames. Truncating"
         )
         pose_frames = pose_frames[:, :max_frames, :]
+
+    return pose_frames
+
+def apply_augmentations(pose_frames, sigma_temporal=0.2, p_flip=0.2, sigma_spatial=0.2, sigma_noise=0.001):
+    """
+    Applies the full SignCLIP augmentation stack sequentially to a (1, T, 609) tensor.
+    """
+    # ---------------------------------------------------------
+    # 1. Temporal Augmentation (Stretching/Compressing Time)
+    # ---------------------------------------------------------
+    scale_time = random.gauss(1.0, sigma_temporal)
+    scale_time = max(0.5, min(2.0, scale_time)) # Bound to prevent crashes
+    
+    T = pose_frames.size(1)
+    new_T = int(T * scale_time)
+    
+    if new_T > 1 and new_T != T:
+        pose_permuted = pose_frames.permute(0, 2, 1) # [1, 609, T]
+        pose_interpolated = F.interpolate(
+            pose_permuted, size=new_T, mode='linear', align_corners=False
+        )
+        pose_frames = pose_interpolated.permute(0, 2, 1) # Back to [1, new_T, 609]
+
+    # ---------------------------------------------------------
+    # 2. Spatial 2D Augmentation (Scaling the skeleton size)
+    # ---------------------------------------------------------
+    # We draw a random scale factor and multiply all coordinates.
+    # Because the body is centered at (0,0), this perfectly zooms the skeleton in/out.
+    scale_spatial = random.gauss(1.0, sigma_spatial)
+    scale_spatial = max(0.5, min(1.5, scale_spatial))
+    
+    pose_frames = pose_frames * scale_spatial
+
+    # ---------------------------------------------------------
+    # 3. Random Horizontal Flipping (p=0.2)
+    # ---------------------------------------------------------
+    if random.random() < p_flip:
+        # Since X=0 is the center of the body, negating the X coordinates 
+        # mirrors the skeleton perfectly across the vertical axis.
+        # X coordinates are at indices 0, 3, 6, 9...
+        pose_frames[:, :, 0::3] = pose_frames[:, :, 0::3] * -1
+        
+        # *Note on Anatomical Integrity:* # This mirrors the coordinates, but leaves the indices where they are.
+        # The AI will see the "Right Hand" data physically moving on the left side of the screen. 
+        # This acts as a massive regularization boost, forcing the AI to learn spatial invariance.
+
+    # ---------------------------------------------------------
+    # 4. Gaussian Keypoint Noise (Jitter)
+    # ---------------------------------------------------------
+    # Adds a tiny, random flutter to every single coordinate to prevent exact memorization.
+    noise = torch.randn_like(pose_frames) * sigma_noise
+    pose_frames = pose_frames + noise
 
     return pose_frames

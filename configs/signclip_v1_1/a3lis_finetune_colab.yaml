@@ -5,6 +5,10 @@
 #
 # Checkpoints are saved to Google Drive:
 #   /content/drive/MyDrive/signclip_a3lis_finetune/
+#   into the subfolder name you put on save_dir
+# The tensorboard data to make the graphs instead is saved to the same
+# folder, but you have to change also here the specific subfolder name 
+# in tensorboard_logdir
 #
 # Usage: tests/a3lis_finetune_colab.ipynb handles all setup automatically.
 
@@ -26,7 +30,8 @@ dataset:
 fairseq:
   common:
     fp16: true
-    tensorboard_logdir: /content/signclip-lis-experiments/runs/a3lis_finetune
+    #tensorboard_logdir: /content/signclip-lis-experiments/runs/a3lis_finetune
+    tensorboard_logdir: /content/drive/MyDrive/signclip_a3lis_finetune/augmented/global_NCE
     log_interval: 1000
   dataset:
     num_workers: 2
@@ -42,13 +47,14 @@ fairseq:
     warmup_updates: 122
     weight_decay: 0.01
     ddp_backend: no_c10d
-    max_epoch: 150
+    max_epoch: 50
   checkpoint:
     no_epoch_checkpoints: true
     reset_optimizer: true
     reset_dataloader: true
     reset_meters: true
-    save_dir: /content/drive/MyDrive/signclip_a3lis_finetune
+    #save_dir: /content/drive/MyDrive/signclip_a3lis_finetune
+    save_dir: /content/drive/MyDrive/signclip_a3lis_finetune/augmented/global_NCE
     restore_file: /content/signclip-lis-experiments/pretrained_models/baseline_temporal_checkpoint_best.pt
 task_type: sweep_small
 model:

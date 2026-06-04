@@ -131,6 +131,7 @@ class A3LISTextProcessor:
         if key in self.label_map:
             return self.label_map[key]
         raise KeyError(f"Label not found in label_map: {label!r} (normalized: {key!r})")
+        
 
 class A3LISAlignProcessor:
     def __init__(self, tokenizer, max_text_len=64, pretokenized_labels=None):
