@@ -7,27 +7,12 @@
 import os
 import pickle
 import torch
-import unicodedata
 from transformers import AutoTokenizer
 import pandas as pd
 import json
 from glob import glob
 from signclip.datasets.mmdataset import MMDataset
 from pose_format import Pose
-
-
-def _normalize_label_key(label):
-    """Canonicalize label strings for stable map lookups across Unicode variants."""
-    if label is None:
-        return label
-    text = unicodedata.normalize('NFKC', str(label)).strip()
-    # Normalize apostrophe-like chars to plain ASCII apostrophe.
-    text = (text
-            .replace('\u2019', "'")
-            .replace('\u2018', "'")
-            .replace('\u02bc', "'")
-            .replace('\u0060', "'"))
-    return text
 # Utility: load split config (from data_loader.py)
 def load_split_config(split_config_path):
     if not os.path.exists(split_config_path):
@@ -53,22 +38,10 @@ class A3LISMetaProcessor:
         self.split = None  # can be set externally if needed
         # Load label mapping from CSV (also English and category if available)
         df = pd.read_csv(csv_path)
-        self.label_map = {
-            _normalize_label_key(row['label_italian']): idx
-            for idx, row in df.iterrows()
-        }
+        self.label_map = {row['label_italian']: idx for idx, row in df.iterrows()}
         # Parse English labels as list, strip whitespace
-        self.english_map = {
-            _normalize_label_key(row['label_italian']):
-            ([lbl.strip() for lbl in str(row['label_english']).split(';')]
-             if pd.notna(row['label_english']) else ["UNKNOWN"])
-            for idx, row in df.iterrows()
-        }
-        self.category_map = {
-            _normalize_label_key(row['label_italian']): row['category']
-            for idx, row in df.iterrows()
-            if 'category' in row and pd.notna(row['category'])
-        }
+        self.english_map = {row['label_italian']: [lbl.strip() for lbl in str(row['label_english']).split(';')] if pd.notna(row['label_english']) else ["UNKNOWN"] for idx, row in df.iterrows()}
+        self.category_map = {row['label_italian']: row['category'] for idx, row in df.iterrows() if 'category' in row and pd.notna(row['category'])}
 
         # Load split config if provided
         split_config = load_split_config(split_config_path) if split_config_path else None
@@ -81,7 +54,6 @@ class A3LISMetaProcessor:
         for pose_path in pose_files:
             fname = os.path.basename(pose_path)
             signer, label = fname[:-5].split('_', 1)
-            norm_label = _normalize_label_key(label)
             # Determine split
             if signer in train_signers:
                 split = 'train'
@@ -95,14 +67,14 @@ class A3LISMetaProcessor:
             if split_filter and split != split_filter:
                 continue
             # Get English and category if available
-            english_labels = self.english_map.get(norm_label, ["UNKNOWN"])
+            english_labels = self.english_map.get(label, ["UNKNOWN"])
             # Use only the first English label
             english_label = english_labels[0]
-            category = self.category_map.get(norm_label, None)
+            category = self.category_map.get(label, None)
             self.samples.append({
                 'signer': signer,
-                'label': norm_label,
-                'label_italian': norm_label,
+                'label': label,
+                'label_italian': label,
                 'label_english': english_label,
                 'pose_path': pose_path,
                 'split': split,
@@ -127,11 +99,8 @@ class A3LISTextProcessor:
     def __init__(self, label_map):
         self.label_map = label_map
     def __call__(self, label):
-        key = _normalize_label_key(label)
-        if key in self.label_map:
-            return self.label_map[key]
-        raise KeyError(f"Label not found in label_map: {label!r} (normalized: {key!r})")
-        
+        clean_label = label.replace("’", "'")
+        return self.label_map[clean_label]
 
 class A3LISAlignProcessor:
     def __init__(self, tokenizer, max_text_len=64, pretokenized_labels=None):
