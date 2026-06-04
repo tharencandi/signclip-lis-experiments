@@ -1,35 +1,24 @@
 """
-Precompute pose embeddings with optional SignCLIP-style normalisation.
+Precompute pose embeddings.
 
-Normalisation steps (when --normalize is enabled):
-1. Shoulder-based normalisation: D_shoulders = 1, mid-point = (0, 0)
-2. E6: Remove redundant keypoints (keep body, hands, face)
-3. E6.2: Anonymisation - subtract first frame, add mean pose (motion-relative)
+Default behavior uses the canonical SignCLIP preprocessing exactly once via
+demo_sign.embed_pose -> preprocess_pose.
 
-Note: E6.1 distribution standardization requires global dataset statistics which we don't have.
-Per-sample normalisation destroys discriminative features (accuracy drops from 50% to 20%).
+Optional first-frame anonymization can be enabled before embed_pose.
 
 Usage:
-    # A3LIS dataset WITH normalisation  
+    # Recommended: canonical preprocessing only (single pass)
     python src/precompute_embeddings.py \
         --dataset_root dataset/A3LIS_dataset_poses \
-        --output_dir dataset/embeddings/a3lis_normalised \
-        --normalize \
+        --output_dir dataset/embeddings/a3lis_canonical \
         --model_name default
-    
-    # A3LIS dataset WITHOUT normalisation (raw embeddings)
+
+    # Optional: first-frame anonymization before canonical preprocessing
     python src/precompute_embeddings.py \
         --dataset_root dataset/A3LIS_dataset_poses \
-        --output_dir dataset/embeddings/a3lis_raw \
-        --no-normalize \
-        --model_name default
-    
-    # Legacy mode with normalisation
-    python src/precompute_normalised_embeddings.py \
-        --pose_dir dataset/poses \
-        --output_dir dataset/embeddings/normalised \
-        --normalize \
-        --model_name default
+        --output_dir dataset/embeddings/a3lis_anonymized \
+        --model_name default \
+        --anonymize
 """
 
 import argparse
@@ -48,17 +37,13 @@ if str(project_root) not in sys.path:
 from demo_sign import embed_pose
 
 
-def load_and_normalise_pose(pose_path: Path, normalize: bool = True,
-                            remove_redundant: bool = True, 
-                            anonymize: bool = True) -> Optional[np.ndarray]:
+def load_and_normalise_pose(pose_path: Path, anonymize: bool = False) -> Optional[np.ndarray]:
     """
-    Load a .pose file and optionally apply SignCLIP normalization.
+    Load a .pose file and optionally apply first-frame anonymization.
     
     Args:
         pose_path: Path to .pose file
-        normalize: Apply normalization (if False, load raw pose)
-        remove_redundant: Remove redundant keypoints (E6) - only if normalize=True
-        anonymize: Apply first-frame anonymization (E6.2) - only if normalize=True
+        anonymize: Apply first-frame anonymization before embed_pose().
     
     Returns:
         pose (normalised or raw) as numpy array, or None if failed
@@ -71,55 +56,14 @@ def load_and_normalise_pose(pose_path: Path, normalize: bool = True,
         with open(pose_path, 'rb') as f:
             pose = Pose.read(f.read(), NumPyPoseBody)
         
-        # Apply normalization only if enabled
-        if normalize:
-            # E6: Remove redundant keypoints (keep body, hands, face - filter out extras)
-            # This step is optional and depends on the pose format
-            if remove_redundant:
-                try:
-                    # Get component names from header
-                    components = [c.name for c in pose.header.components]
-                    
-                    # Keep essential components for sign language
-                    keep_components = []
-                    for component in ['POSE_LANDMARKS', 'LEFT_HAND_LANDMARKS', 'RIGHT_HAND_LANDMARKS', 
-                                    'FACE_LANDMARKS', 'pose_keypoints_2d', 'hand_left_keypoints_2d',
-                                    'hand_right_keypoints_2d', 'face_keypoints_2d']:
-                        if component in components:
-                            keep_components.append(component)
-                    
-                    # Only filter if we found components to keep
-                    if keep_components and len(keep_components) < len(components):
-                        pose = pose.get_components(keep_components)
-                except Exception as e:
-                    # If component filtering fails, continue without it
-                    pass
-            
-            # Step 1: Regular normalization (shoulder-based)
-            # This sets D_shoulders = 1, mid-point = (0, 0)
-            pose.normalize()
-            
-            # E6.2: Anonymization - remove first frame appearance, add mean pose
-            # This makes motion relative while preserving dynamics
-            if anonymize and pose.body.data.shape[0] > 1:  # Need at least 2 frames
-                try:
-                    # Get pose data: shape is (frames, people, points, dims)
-                    data = pose.body.data
-                    
-                    # Compute mean pose across all frames for this video
-                    mean_pose = np.mean(data, axis=0, keepdims=True)  # (1, people, points, dims)
-                    
-                    # Subtract first frame, then add mean pose
-                    first_frame = data[0:1]  # (1, people, points, dims)
-                    pose.body.data = data - first_frame + mean_pose
-                    
-                except Exception as e:
-                    # If anonymization fails, continue without it
-                    pass
-            
-            # Note: E6.1 distribution standardization requires global mean/std across entire dataset
-            # Applying per-sample normalization destroys discriminative features
-            # We skip it here since we don't have the global statistics
+        if anonymize and pose.body.data.shape[0] > 1:
+            try:
+                data = pose.body.data
+                mean_pose = np.mean(data, axis=0, keepdims=True)
+                first_frame = data[0:1]
+                pose.body.data = data - first_frame + mean_pose
+            except Exception:
+                pass
         
         return pose
         
@@ -133,22 +77,18 @@ def precompute_normalised_embeddings(
     output_dir: str,
     model_name: str = 'default',
     checkpoint_path: Optional[str] = None,
-    normalize: bool = True,
-    remove_redundant: bool = True,
-    anonymize: bool = True,
+    anonymize: bool = False,
     dataset_root: Optional[str] = None
 ):
     """
-    Compute pose embeddings with optional normalization.
+    Compute pose embeddings with canonical preprocessing and optional anonymization.
     
     Args:
         pose_dir: Directory containing original .pose files (legacy mode)
         output_dir: Directory to save embeddings
         model_name: SignCLIP model to use
         checkpoint_path: Optional checkpoint override (used with model_name=a3lis_finetune)
-        normalize: Apply normalization (if False, use raw poses)
-        remove_redundant: Remove redundant keypoints (E6) - only if normalize=True
-        anonymize: Apply first-frame anonymization (E6.2) - only if normalize=True
+        anonymize: Apply first-frame anonymization before embed_pose().
         dataset_root: Root directory for A3LIS dataset (uses data_loader.py)
     """
     output_path = Path(output_dir)
@@ -215,15 +155,8 @@ def precompute_normalised_embeddings(
             'labels_english': ['unknown']
         } for f in pose_files]
     
-    if normalize:
-        print(f"Normalization steps:")
-        print(f"  - Shoulder-based: D_shoulders=1, mid-point=(0,0)")
-        if remove_redundant:
-            print(f"  - E6: Remove redundant keypoints")
-        if anonymize:
-            print(f"  - E6.2: Anonymization (first-frame relative + mean pose)")
-    else:
-        print(f"Normalization: DISABLED (using raw poses)")
+    print(f"Anonymization (first-frame): {'ENABLED' if anonymize else 'DISABLED'}")
+    print("Canonical preprocess_pose() inside embed_pose() is always applied once.")
     print(f"Output directory: {output_dir}")
     print(f"Model: {model_name}\n")
     if checkpoint_path:
@@ -248,7 +181,7 @@ def precompute_normalised_embeddings(
             continue
         
         # Load pose (with or without normalization)
-        pose = load_and_normalise_pose(pose_file, normalize, remove_redundant, anonymize)
+        pose = load_and_normalise_pose(pose_file, anonymize)
         if pose is None:
             error_count += 1
             continue
@@ -298,11 +231,10 @@ def precompute_normalised_embeddings(
             json.dump({
                 'model_name': model_name,
                 'checkpoint_path': checkpoint_path,
-                'normalization': {
-                    'enabled': normalize,
-                    'shoulder_based': normalize,
-                    'remove_redundant': normalize and remove_redundant,
-                    'anonymize': normalize and anonymize
+                'preprocess': {
+                    'canonical_preprocess_pose': True,
+                    'anonymize_first_frame': anonymize,
+                    'note': 'Canonical preprocess_pose() is applied in embed_pose().'
                 },
                 'dataset': {
                     'total_embeddings': len(metadata_list),
@@ -326,15 +258,12 @@ def precompute_normalised_embeddings(
     print(f"{'='*60}")
     
     if success_count > 0 or skip_count > 0:
-        if normalize:
-            print(f"\n✓ Normalised embeddings saved to {output_dir}")
-        else:
-            print(f"\n✓ Raw embeddings saved to {output_dir}")
+        print(f"\n✓ Embeddings saved to {output_dir}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Precompute pose embeddings with optional SignCLIP-style normalization"
+        description="Precompute pose embeddings (canonical preprocessing by default)"
     )
     
     # Add mutually exclusive group for dataset source
@@ -354,7 +283,7 @@ def main():
         '--output_dir',
         type=str,
         required=True,
-        help='Directory to save normalised embeddings'
+        help='Directory to save embeddings'
     )
     
     parser.add_argument(
@@ -373,46 +302,20 @@ def main():
              'Most useful with --model_name a3lis_finetune.'
     )
     
-    # Normalization control
-    normalize_group = parser.add_mutually_exclusive_group()
-    normalize_group.add_argument(
-        '--normalize',
-        action='store_true',
-        default=True,
-        help='Apply pose normalization (default: True)'
-    )
-    normalize_group.add_argument(
-        '--no-normalize',
-        action='store_true',
-        help='Skip normalization, use raw poses'
-    )
-    
-    # Fine-grained normalization control (only applies when --normalize is used)
     parser.add_argument(
-        '--no-remove-redundant',
+        '--anonymize',
         action='store_true',
-        help='Skip removing redundant keypoints (E6) - only applies when normalizing'
-    )
-    
-    parser.add_argument(
-        '--no-anonymize',
-        action='store_true',
-        help='Skip first-frame anonymization (E6.2) - only applies when normalizing'
+        help='Apply first-frame anonymization before canonical preprocess_pose().'
     )
     
     args = parser.parse_args()
-    
-    # Determine normalize flag
-    normalize = not args.no_normalize
     
     precompute_normalised_embeddings(
         pose_dir=args.pose_dir or '',
         output_dir=args.output_dir,
         model_name=args.model_name,
         checkpoint_path=args.checkpoint_path,
-        normalize=normalize,
-        remove_redundant=not args.no_remove_redundant,
-        anonymize=not args.no_anonymize,
+        anonymize=args.anonymize,
         dataset_root=args.dataset_root
     )
 
