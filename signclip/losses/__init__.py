@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 from .loss import *
 from .nce import *
+from .dhn_nce import *
 
 try:
     from .fairseqmmloss import *

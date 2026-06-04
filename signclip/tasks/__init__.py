@@ -22,6 +22,11 @@ except ImportError:
     pass
 
 try:
+    from .a3lis_dhn_finetune import *
+except ImportError:
+    pass
+
+try:
     from .expretritask import *
 except ImportError:
     pass
