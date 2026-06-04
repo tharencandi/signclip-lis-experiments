@@ -26,12 +26,71 @@ from signclip.tasks.retritask import RetriTask
 from signclip.datasets.a3lis_dataset import A3LISDataset
 from signclip.utils.pose_utils import preprocess_pose, MAX_FRAMES
 from signclip.utils.metrics import compute_retrieval_metrics
+from signclip.utils.samplers import BalancedBatchSampler
 from signclip.utils.a3lis_paths import (
     POSES_ROOT,
     CSV_PATH,
     SPLIT_CONFIG_PATH,
     PRETOKENIZED_LABELS_PATH,
 )
+
+class CrossModalSupConLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, video_features, text_features, labels):
+        # Calculate the standard similarity matrices
+        logits_per_video = video_features @ text_features.t()
+        logits_per_text = text_features @ video_features.t()
+
+        # Create a mask that is 1 where labels match, and 0 everywhere else
+        labels = labels.contiguous().view(-1, 1)
+        mask = torch.eq(labels, labels.T).float().to(video_features.device)
+
+        # Compute log-softmax for both directions
+        log_prob_video = F.log_softmax(logits_per_video, dim=1)
+        log_prob_text = F.log_softmax(logits_per_text, dim=1)
+
+        # Compute mean of log-likelihood over positive pairs
+        loss_v = -(mask * log_prob_video).sum(1) / mask.sum(1)
+        loss_t = -(mask * log_prob_text).sum(1) / mask.sum(1)
+
+        # Return the average of both directions
+        return (loss_v.mean() + loss_t.mean()) / 2
+
+class VideoSupConLoss(nn.Module):
+    def __init__(self, temperature=0.07):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, video_features, labels):
+        device = video_features.device
+        labels = labels.contiguous().view(-1, 1)
+        
+        mask = torch.eq(labels, labels.T).float().to(device)
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(video_features.size(0)).view(-1, 1).to(device),
+            0
+        )
+        mask = mask * logits_mask
+        
+        similarity_matrix = torch.matmul(video_features, video_features.T) / self.temperature
+        logits_max, _ = torch.max(similarity_matrix, dim=1, keepdim=True)
+        logits = similarity_matrix - logits_max.detach()
+        
+        exp_logits = torch.exp(logits) * logits_mask
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-6)
+        
+        sum_mask = mask.sum(1)
+        valid_anchors = sum_mask > 0 
+        
+        if not valid_anchors.any():
+            return torch.tensor(0.0, device=device)
+            
+        loss = -(mask * log_prob).sum(1)[valid_anchors] / sum_mask[valid_anchors]
+        return loss.mean()
 
 
 class fineTuneA3LIS(RetriTask):
@@ -92,7 +151,8 @@ class fineTuneA3LIS(RetriTask):
         trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.model.parameters())
         print(f"Trainable parameters: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
-
+        # USED FOR EVERYTHING ELSE
+        '''
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
         lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
         weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
@@ -103,9 +163,82 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        self.nce_loss = MMContraLoss()
+        self.nce_loss = MMContraLoss() # SignClip loss
+        #self.supcon_loss = VideoSupConLoss(temperature = 0.07)
+        #self.supcon_weight = 0.2
 
         max_text_len = getattr(config.dataset, 'max_len', 64)
+        '''
+        # USED FOR CROSS-ENTROPY
+        '''
+        opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
+        lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
+        weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
+        # 1. Build the Classification Head (Assuming 768 is the SignCLIP video embedding dimension)
+        self.classifier_head = nn.Linear(768, 149).to(self.device)
+        self.ce_loss = nn.CrossEntropyLoss()
+        # 2. Gather trainable parameters and ADD the new head to them!
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        trainable_params.extend(list(self.classifier_head.parameters()))
+        # 3. Initialize Optimizer
+        if opt_name == 'adam':
+            self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+        else:
+            self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
+        max_text_len = getattr(config.dataset, 'max_len', 64)
+        '''
+        # USED FOR SIGNCLIP LOSS + CROSS-ENTROPY
+        '''
+        # 1. The Multimodal Text-Video Loss
+        self.nce_loss = MMContraLoss()
+        # 2. The Classification Head & Loss (768 embedding dim, 149 classes)
+        self.classifier_head = nn.Linear(768, 149).to(self.device)
+        self.ce_loss = nn.CrossEntropyLoss()
+        # 3. Define the blending weight (Keep NCE as the primary focus, CE as secondary)
+        self.ce_weight = 0.5  
+        # 4. Gather parameters and inject the new head
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        trainable_params.extend(list(self.classifier_head.parameters()))
+        opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
+        lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
+        weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
+        if opt_name == 'adam':
+            self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+        else:
+            self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
+        max_text_len = getattr(config.dataset, 'max_len', 64)
+        '''
+
+        # USED FOR GLOBAL NCE
+        
+        # Remove all external loss initializations (no MMContraLoss, no CE head)
+        opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
+        lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
+        weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
+        # Gather only the standard model parameters
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        if opt_name == 'adam':
+            self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+        else:
+            self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
+        max_text_len = getattr(config.dataset, 'max_len', 64)
+        
+
+        # USED FOR GLOBAL NCE + DECOUPLED SUP-CON
+        '''
+        opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
+        lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
+        weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
+        # Gather only the standard model parameters
+        trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        if opt_name == 'adam':
+            self.optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+        else:
+            self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
+        # The alpha weight for Decoupled SupCon (Default 0.5 per the paper)
+        self.dcl_weight = 0.5
+        max_text_len = getattr(config.dataset, 'max_len', 64)
+        '''
 
         self.train_dataset = A3LISDataset(
             POSES_ROOT, CSV_PATH,
@@ -125,23 +258,43 @@ class fineTuneA3LIS(RetriTask):
         batch_size = getattr(config.fairseq.dataset, 'batch_size', 16)
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
+        # BALANCED BATCH SAMPLER
+        '''
+        if len(self.train_dataset) > 0:
+            # Create the sampler (P=4 classes, K=4 instances = batch size of 16)
+            balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=8, n_samples=2)
+            
+            self.train_data = DataLoader(
+                self.train_dataset,
+                # NOTE: When using batch_sampler, you MUST remove batch_size, shuffle, and drop_last!
+                batch_sampler=balanced_sampler,
+                collate_fn=self.train_pose_collate_fn,
+                num_workers=num_workers,
+            )
+        else:
+            self.train_data = None
+        '''
+        # STANDARD BATCHES
+        
         if len(self.train_dataset) > 0:
             self.train_data = DataLoader(
                 self.train_dataset,
                 batch_size=batch_size,
                 shuffle=True,
-                collate_fn=self.pose_collate_fn,
+                collate_fn=self.train_pose_collate_fn,
                 num_workers=num_workers,
                 drop_last=False
             )
         else:
             self.train_data = None
+        
+        
 
         self.val_data = DataLoader(
             self.val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            collate_fn=self.pose_collate_fn,
+            collate_fn=self.val_pose_collate_fn,
             num_workers=num_workers
         ) if len(self.val_dataset) > 0 else None
 
@@ -212,6 +365,13 @@ class fineTuneA3LIS(RetriTask):
             return self.model.logit_scale.exp()
         return 14.28  # default: 1 / 0.07
 
+    # Original one, gemini says this:
+    # I am also fixing a tiny math bug in your original code here. 
+    # Your original code multiplied logit_scale into both embeddings 
+    # before passing them to the loss. When the loss takes the dot product, 
+    # that accidentally squares the temperature scale! 
+    # The standard way is to multiply the scale into the embeddings only once.
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         """Batch-local bidirectional NCE loss (MMContraLoss) + 147-class sim_matrix.
 
@@ -230,6 +390,187 @@ class fineTuneA3LIS(RetriTask):
         # 147-class sim_matrix for retrieval metrics only (logit_scale already baked in)
         sim_matrix = video_embeds @ text_embeds_all.t()  # [N x 147]
         return sim_matrix, loss
+    '''
+    # For Supervised contrastive loss
+    '''
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale       = self._get_logit_scale()
+        
+        # 1. Normalize the embeddings (do NOT multiply logit_scale here yet)
+        raw_video_embeds  = F.normalize(output["pooled_video"], p=2, dim=-1)
+        raw_text_embeds   = F.normalize(output["pooled_text"],  p=2, dim=-1)
+        text_embeds_all   = self.all_text_embeds.to(self.device)
+
+        # 2. Multiply by the scale just before passing to the loss
+        scaled_video = logit_scale * raw_video_embeds
+        scaled_text = logit_scale * raw_text_embeds
+
+        # 3. Calculate SupCon Loss using the labels!
+        loss = self.supcon_loss(scaled_video, scaled_text, label_tensor)
+
+        # 4. Compute 147-class sim_matrix for retrieval metrics
+        sim_matrix = scaled_video @ text_embeds_all.t()
+        
+        return sim_matrix, loss
+    '''
+    # Original + SupCon as a regulizer term
+    '''
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale       = self._get_logit_scale()
+        
+        # 1. Base L2 normalization
+        raw_video_embeds  = F.normalize(output["pooled_video"], p=2, dim=-1)
+        raw_text_embeds   = F.normalize(output["pooled_text"],  p=2, dim=-1)
+        text_embeds_all   = self.all_text_embeds.to(self.device)
+
+        # 2. Scale features for the multimodal NCE loss
+        scaled_video = logit_scale * raw_video_embeds
+        scaled_text  = logit_scale * raw_text_embeds
+
+        # Loss 1: Standard Text-to-Video Contrastive Loss
+        loss_nce = self.nce_loss(scaled_video, scaled_text)
+
+        # Loss 2: Video-to-Video Supervised Contrastive Regularizer 
+        loss_supcon = self.supcon_loss(raw_video_embeds, label_tensor)
+
+        # Blended Loss output
+        total_loss = loss_nce + (self.supcon_weight * loss_supcon)
+
+        # Compute 147-class similarity matrix for tracking evaluation metrics
+        sim_matrix = scaled_video @ text_embeds_all.t()
+        
+        return sim_matrix, total_loss
+    '''
+    # CROSS-ENTROPY
+    '''
+    def _batch_nce_and_sim(self, output, label_tensor):
+        # 1. Get the raw video embedding
+        raw_video_embeds = output["pooled_video"] 
+        
+        # 2. Pass it through our new classification head to get the 147 bucket scores
+        logits = self.classifier_head(raw_video_embeds)
+        
+        # 3. Calculate standard Cross-Entropy Loss
+        loss = self.ce_loss(logits, label_tensor)
+        
+        # 4. Use the logits as the "similarity matrix" so the evaluation metrics still work
+        sim_matrix = logits
+        
+        return sim_matrix, loss
+    '''
+    # Original signclip + cross-entropy
+    '''
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale       = self._get_logit_scale()
+        
+        # --- TASK 1: MULTIMODAL ALIGNMENT (NCE) ---
+        # Normalize and scale the embeddings for the contrastive text mapping
+        raw_video_embeds  = F.normalize(output["pooled_video"], p=2, dim=-1)
+        raw_text_embeds   = F.normalize(output["pooled_text"],  p=2, dim=-1)
+        text_embeds_all   = self.all_text_embeds.to(self.device)
+
+        scaled_video = logit_scale * raw_video_embeds
+        scaled_text  = logit_scale * raw_text_embeds
+
+        loss_nce = self.nce_loss(scaled_video, scaled_text)
+
+        # --- TASK 2: LINEAR SEPARABILITY (CE) ---
+        # Pass the unnormalized video features into the classification head
+        logits = self.classifier_head(output["pooled_video"])
+        loss_ce = self.ce_loss(logits, label_tensor)
+
+        # --- COMBINE ---
+        total_loss = loss_nce + (self.ce_weight * loss_ce)
+
+        # CRITICAL: Return the Multimodal sim_matrix (Video vs Text)
+        # so the evaluation metrics track true Direct Retrieval accuracy!
+        sim_matrix = scaled_video @ text_embeds_all.t()
+        
+        return sim_matrix, total_loss
+    '''
+    # Global NCE
+    
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale = self._get_logit_scale()
+        
+        # 1. L2 Normalize both modalities
+        raw_video_embeds = F.normalize(output["pooled_video"], p=2, dim=-1)
+        text_embeds_all  = self.all_text_embeds.to(self.device)
+
+        # 2. Scale the video and compute Global Logits against ALL 149 classes
+        scaled_video = logit_scale * raw_video_embeds
+        global_logits = scaled_video @ text_embeds_all.t()  # Shape: [16, 149]
+
+        # 3. Global NCE Loss
+        loss_nce = F.cross_entropy(global_logits, label_tensor)
+        
+        # Return the global_logits as the sim_matrix so metrics are calculated perfectly
+        return global_logits, loss_nce
+    
+
+    # Global NCE + Decoupled Sup-Con
+    '''
+    def _batch_nce_and_sim(self, output, label_tensor):
+        logit_scale = self._get_logit_scale()
+        device = output["pooled_video"].device
+        
+        # 1. Normalize embeddings
+        raw_video = F.normalize(output["pooled_video"], p=2, dim=-1)
+        text_embeds_all = self.all_text_embeds.to(device)
+
+        # ==========================================
+        # LOSS 1: GLOBAL NCE (Text-to-Video Alignment)
+        # ==========================================
+        scaled_video = logit_scale * raw_video
+        global_logits = scaled_video @ text_embeds_all.t()
+        loss_nce = F.cross_entropy(global_logits, label_tensor)
+
+        # ==========================================
+        # LOSS 2: DECOUPLED SUPCON (DCL)
+        # ==========================================
+        labels = label_tensor.contiguous().view(-1, 1)
+        mask = torch.eq(labels, labels.T).float()
+        
+        # self_mask: 1 on diagonal (the video itself)
+        self_mask = torch.eye(labels.shape[0], device=device)
+        
+        # pos_mask (P_i): Same class, excluding self
+        pos_mask = mask - self_mask
+        
+        # neg_mask: Different classes ONLY (The "Decoupled" magic!)
+        neg_mask = 1.0 - mask
+        
+        # Base similarity matrix scaled by temperature (tau=0.07)
+        tau = 0.07 
+        sim_matrix = torch.matmul(raw_video, raw_video.T) / tau
+        
+        # Denominator: Sum of exp over NEGATIVES only
+        exp_sim = torch.exp(sim_matrix) * neg_mask
+        denominator = exp_sim.sum(dim=1, keepdim=True)
+        
+        # Log Prob: <v_i, v_p> - log(denominator)
+        log_prob = sim_matrix - torch.log(denominator + 1e-6)
+        
+        # Mean over positive pairs
+        sum_pos = pos_mask.sum(dim=1)
+        valid_anchors = sum_pos > 0
+        
+        if valid_anchors.any():
+            loss_dcl = -(pos_mask * log_prob).sum(dim=1)[valid_anchors] / sum_pos[valid_anchors]
+            loss_dcl = loss_dcl.mean()
+        else:
+            loss_dcl = torch.tensor(0.0, device=device)
+
+        # ==========================================
+        # COMBINED OBJECTIVE
+        # ==========================================
+        total_loss = loss_nce + (self.dcl_weight * loss_dcl)
+
+        # Return global_logits as sim_matrix for perfect metric tracking
+        return global_logits, total_loss
+    '''
+
+
 
     def _retrieval_metrics(self, sim_matrix, label_tensor):
         return compute_retrieval_metrics(sim_matrix, label_tensor)
@@ -341,7 +682,13 @@ class fineTuneA3LIS(RetriTask):
     # DataLoader utilities
     # ------------------------------------------------------------------
 
-    def pose_collate_fn(self, batch):
+    def train_pose_collate_fn(self, batch):
+        return self.pose_collate_fn(batch, augment=True)
+
+    def val_pose_collate_fn(self, batch):
+        return self.pose_collate_fn(batch, augment=False)
+
+    def pose_collate_fn(self, batch, augment=False):
         if len(batch) == 0:
             return {
                 'pose':   torch.empty(0),
@@ -355,7 +702,7 @@ class fineTuneA3LIS(RetriTask):
             # Use the canonical preprocessing pipeline (shoulder normalisation,
             # face-contour filtering, leg hiding, NaN→0) so that fine-tuning
             # and inference receive the same input distribution.
-            p = preprocess_pose(item['pose'], max_frames=MAX_FRAMES)[0]  # (T, 609)
+            p = preprocess_pose(item['pose'], max_frames=MAX_FRAMES, augment=augment)[0]  # (T, 609)
             poses.append(p)
             lengths.append(p.shape[0])
 
