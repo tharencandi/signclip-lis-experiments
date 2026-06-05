@@ -460,8 +460,10 @@ def train_and_evaluate_fold(
     # Training loop
     best_r_at_1 = 0
     best_epoch = 0
-    patience_counter = 0
     train_history = []
+
+    best_model_state = None
+    best_ema_shadow = None
 
     for epoch in range(1, args.epochs + 1):
         # Train
@@ -486,7 +488,6 @@ def train_and_evaluate_fold(
         if eval_metrics['r@1'] > best_r_at_1:
             best_r_at_1 = eval_metrics['r@1']
             best_epoch = epoch
-            patience_counter = 0
 
             # Save best model
             if args.save_models:
@@ -499,8 +500,6 @@ def train_and_evaluate_fold(
                     'optimizer_state_dict': optimizer.state_dict(),
                     'metrics': eval_metrics
                 }, save_path)
-        else:
-            patience_counter += 1
 
         # Log progress
         print(f"\nEpoch {epoch}/{args.epochs}")
@@ -520,23 +519,15 @@ def train_and_evaluate_fold(
             'train': train_metrics,
             monitor_label.lower(): eval_metrics
         })
-
-        # Early stopping
-        if args.patience > 0 and patience_counter >= args.patience:
-            print(f"\nEarly stopping triggered at epoch {epoch} "
-                  f"(no {monitor_label} R@1 improvement for {args.patience} epochs)")
-            break
     
     # Final evaluation with best EMA weights
-    if args.save_models and ema is not None:
-        checkpoint_path = Path(args.output_dir) / f'fold_{fold}_best.pt'
-        if checkpoint_path.exists():
-            checkpoint = torch.load(checkpoint_path)
-            if 'ema_shadow' in checkpoint and checkpoint['ema_shadow'] is not None:
-                # Load EMA weights
-                for name, param in model.named_parameters():
-                    if name in checkpoint['ema_shadow']:
-                        param.data = checkpoint['ema_shadow'][name]
+    print(f"\nLoading best weights from epoch {best_epoch} for final test evaluation...")
+    if ema is not None and best_ema_shadow is not None:
+        for name, param in model.named_parameters():
+            if name in best_ema_shadow:
+                param.data = best_ema_shadow[name].to(device)
+    elif best_model_state is not None:
+        model.load_state_dict({k: v.to(device) for k, v in best_model_state.items()})
     
     final_metrics = evaluate(model, test_loader, device, num_classes)
     
@@ -691,10 +682,6 @@ def main():
                        help='Use Exponential Moving Average')
     parser.add_argument('--ema_momentum', type=float, default=0.9998,
                        help='EMA momentum')
-    
-    # Early stopping
-    parser.add_argument('--patience', type=int, default=10,
-                       help='Early stopping patience (epochs without improvement). Set to 0 to disable.')
     
     # System
     parser.add_argument('--num_workers', type=int, default=4,
