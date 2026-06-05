@@ -152,7 +152,7 @@ class fineTuneA3LIS(RetriTask):
         total = sum(p.numel() for p in self.model.parameters())
         print(f"Trainable parameters: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
         # USED FOR EVERYTHING ELSE
-        '''
+        
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
         lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
         weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
@@ -163,12 +163,13 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        self.nce_loss = MMContraLoss() # SignClip loss
-        #self.supcon_loss = VideoSupConLoss(temperature = 0.07)
-        #self.supcon_weight = 0.2
+        #self.nce_loss = MMContraLoss() # SignClip loss
+        self.supcon_loss = CrossModalSupConLoss() # SupCon loss
+        #self.supcon_loss = VideoSupConLoss(temperature = 0.07) # Regularizer SupCon loss
+        #self.supcon_weight = 0.2 # Regularizer SupCon loss
 
         max_text_len = getattr(config.dataset, 'max_len', 64)
-        '''
+        
         # USED FOR CROSS-ENTROPY
         '''
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
@@ -210,7 +211,7 @@ class fineTuneA3LIS(RetriTask):
         '''
 
         # USED FOR GLOBAL NCE
-        
+        '''
         # Remove all external loss initializations (no MMContraLoss, no CE head)
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
         lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
@@ -222,7 +223,7 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
         max_text_len = getattr(config.dataset, 'max_len', 64)
-        
+        '''
 
         # USED FOR GLOBAL NCE + DECOUPLED SUP-CON
         '''
@@ -255,7 +256,7 @@ class fineTuneA3LIS(RetriTask):
             pretokenized_labels_path=PRETOKENIZED_LABELS_PATH
         )
 
-        batch_size = getattr(config.fairseq.dataset, 'batch_size', 16)
+        batch_size = getattr(config.fairseq.dataset, 'batch_size', 128)
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
         # BALANCED BATCH SAMPLER
@@ -392,7 +393,7 @@ class fineTuneA3LIS(RetriTask):
         return sim_matrix, loss
     '''
     # For Supervised contrastive loss
-    '''
+    
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale       = self._get_logit_scale()
         
@@ -412,7 +413,7 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()
         
         return sim_matrix, loss
-    '''
+    
     # Original + SupCon as a regulizer term
     '''
     def _batch_nce_and_sim(self, output, label_tensor):
@@ -489,7 +490,7 @@ class fineTuneA3LIS(RetriTask):
         return sim_matrix, total_loss
     '''
     # Global NCE
-    
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale = self._get_logit_scale()
         
@@ -506,7 +507,7 @@ class fineTuneA3LIS(RetriTask):
         
         # Return the global_logits as the sim_matrix so metrics are calculated perfectly
         return global_logits, loss_nce
-    
+    '''
 
     # Global NCE + Decoupled Sup-Con
     '''
