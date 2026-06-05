@@ -707,7 +707,7 @@ class fineTuneA3LIS(RetriTask):
     # ------------------------------------------------------------------
 
     def train_pose_collate_fn(self, batch):
-        return self.pose_collate_fn(batch, augment=True)
+        return self.pose_collate_fn(batch, augment=False) # Change to have or not augmentation
 
     def val_pose_collate_fn(self, batch):
         return self.pose_collate_fn(batch, augment=False)
