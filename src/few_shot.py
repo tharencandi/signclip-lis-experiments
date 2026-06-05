@@ -43,7 +43,6 @@ from collections import defaultdict
 from tqdm import tqdm
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from sklearn.base import BaseEstimator, ClassifierMixin
 from src.embedding_utils import load_a3lis_embeddings, load_all_embeddings_with_signers
@@ -221,7 +220,7 @@ def evaluate_few_shot(
     train_split: str = 'train',
     eval_split: str = 'test',
     num_shots: int = None,
-    output_dir: str = None
+    output_dir: str = None,
 ):
     """
     Perform few-shot evaluation using KNN or Linear Probe.
@@ -354,19 +353,8 @@ def evaluate_few_shot(
         clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
         clf.fit(train_embeddings_norm, train_labels)
 
-    elif method == 'mlp':
-        print("\nTraining MLP classifier (2 hidden layers: 512, 256)...")
-        clf = MLPClassifier(
-            hidden_layer_sizes=(512, 256),
-            activation='relu',
-            solver='adam',
-            max_iter=500,
-            random_state=seed,
-        )
-        clf.fit(train_embeddings_norm, train_labels)
-
     else:
-        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', or 'mlp'")
+        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', or 'ensemble'")
     
     # Predict on test set
     print("\nEvaluating on test set...")
@@ -555,7 +543,7 @@ def evaluate_single_fold(
     test_labels: list,
     test_signer: str,
     method: str,
-    seed: int
+    seed: int,
 ):
     """Evaluate a single LOSO fold."""
     
@@ -575,15 +563,6 @@ def evaluate_single_fold(
         clf.fit(train_embeddings_norm, train_labels)
     elif method == 'svm':
         clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
-        clf.fit(train_embeddings_norm, train_labels)
-    elif method == 'mlp':
-        clf = MLPClassifier(
-            hidden_layer_sizes=(512, 256),
-            activation='relu',
-            solver='adam',
-            max_iter=500,
-            random_state=seed,
-        )
         clf.fit(train_embeddings_norm, train_labels)
     elif method == "ensemble":
         # Placeholder for ensemble method (to be implemented)
@@ -682,7 +661,7 @@ def run_loso_cross_validation(
     use_categories: bool,
     seed: int,
     fold: int = None,
-    output_dir: str = None
+    output_dir: str = None,
 ):
     """
     Run Leave-One-Signer-Out cross-validation for fair comparison with Smart Head.
@@ -739,7 +718,7 @@ def run_loso_cross_validation(
         fold_result = evaluate_single_fold(
             fold_idx, train_embeddings, train_labels,
             test_embeddings, test_labels, test_signer,
-            method, seed
+            method, seed,
         )
         
         all_results.append(fold_result)
@@ -797,7 +776,7 @@ def run_loso_cross_validation(
                         'method': method,
                         'label_language': label_language,
                         'use_categories': use_categories,
-                        'seed': seed
+                        'seed': seed,
                     }
                 }, f, indent=2)
             
@@ -840,7 +819,7 @@ Methods:
     parser.add_argument('--pose_embeddings_dir', type=str, required=True,
                         help='Directory containing precomputed pose .npy embeddings')
     parser.add_argument('--method', type=str, required=True,
-                        choices=['knn', 'linear_probe', 'svm', 'mlp', 'ensemble'],
+                        choices=['knn', 'linear_probe', 'svm', 'ensemble'],
                         help='Few-shot method to use')
     parser.add_argument('--label_language', type=str, default='english',
                         choices=['italian', 'english'],
@@ -879,7 +858,6 @@ Methods:
                             'Only report numbers from test in the paper. '
                             'Ignored in LOSO mode.'
                         ))
-
     args = parser.parse_args()
 
     if args.loso:
@@ -891,7 +869,7 @@ Methods:
             use_categories=args.use_categories,
             seed=args.seed,
             fold=args.fold,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
         )
     else:
         # Run standard signer-independent evaluation
@@ -904,7 +882,7 @@ Methods:
             train_split=args.train_split,
             eval_split=args.eval_split,
             num_shots=args.num_shots,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
         )
 
 

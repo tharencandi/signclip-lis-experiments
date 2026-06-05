@@ -8,7 +8,7 @@ to map these features to Italian Sign Language (LIS) classes.
 Key Components:
 1. Frozen SignCLIP backbone for feature extraction (768-dim embeddings)
 2. Smart Head: MLP adapter with residual connections
-3. Dual-Loss: Cross-Entropy (label smoothing) + Optional Supervised Decoupled Contrastive Loss (inspired by SignCL)
+3. Loss: Cross-Entropy (with label smoothing)
 4. Training: EMA (0.9998), small batch (16), strong augmentation
 5. Evaluation: Fixed signer split (7 train, 1 val for monitoring, 2 test)
 
@@ -24,10 +24,9 @@ import argparse
 import sys
 import json
 from pathlib import Path
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List
 import numpy as np
 from tqdm import tqdm
-from collections import defaultdict, Counter
 import statistics
 
 import torch
@@ -42,7 +41,7 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.embedding_utils import load_a3lis_embeddings, load_all_embeddings_with_signers
+from src.embedding_utils import load_a3lis_embeddings
 
 
 class SmartHead(nn.Module):
@@ -101,80 +100,6 @@ class SmartHead(nn.Module):
         if return_features:
             return logits, x
         return logits
-
-
-"""
-### Supervised Contrastive Loss Formula
-
-
-1.  **Denominator Summation**: In the standard formulation of Supervised Contrastive Loss (Khosla et al.), 
-    the denominator usually sums over *all* samples in the batch except the anchor (both positives and negatives).
-     However, your specific code implementation (`exp_sim = torch.exp(similarity_matrix) * mask_neg`) 
-     strictly zeros out the positives in the denominator, meaning it sums **only** the negatives. 
-     The formula above accurately reflects your specific implementation. 
-
-This is also known as Decoupled Contrastive Learning (DCL).
-
-DCL does not works better as a regulariser in conjunction with cross-entropy loss, whilst
-supervised contrastive learning with positives in the denominator is often used as the main loss, for large batch training without cross-entropy.
-
-Hard Constraint vs. Relative Ranking:
-With positives (Standard): The model tries to make the positive pair more similar relative to everything else in the batch.
-Without positives: The model focuses purely on pushing negatives away. Without the positive term acting as a "buffer" in the denominator, the model might push negatives away so aggressively that it ignores the finer structure of the positive clusters. 
-
-"""
-     
-     
-
-class SupervisedContrastiveLoss(nn.Module):
-    """
-    Supervised Contrastive Loss with dynamic margin.
-    
-    Pulls embeddings of same class together, pushes different classes apart.
-  
-    """
-    
-    def __init__(self, temperature: float = 0.07):
-        super().__init__()
-        self.temperature = temperature  # Temperature scaling for similarity
-    def forward(self, features, labels):
-        """
-        Args:
-            features: (batch_size, embedding_dim) - L2 normalized
-            labels: (batch_size,) - class labels
-        
-        Returns:
-            loss: scalar
-        """
-        device = features.device
-        batch_size = features.shape[0]
-        
-        # Normalize features
-        features = F.normalize(features, p=2, dim=1)
-        
-        # Compute similarity matrix
-        similarity_matrix = torch.matmul(features, features.T) / self.temperature
-        
-        # Create mask for positives (same class, all other samples)
-        labels = labels.contiguous().view(-1, 1)
-        mask_pos = torch.eq(labels, labels.T).float().to(device)
-        mask_pos.fill_diagonal_(0)  # Exclude self
-        
-        # Mask for negatives (all other classes)
-        mask_neg = 1 - torch.eq(labels, labels.T).float().to(device)
-        
-        # Compute log probabilities
-        exp_sim = torch.exp(similarity_matrix) * mask_neg  # Only consider negatives in denominator
-        log_prob = similarity_matrix - torch.log(exp_sim.sum(1, keepdim=True) + 1e-8)
-        
-        # Compute mean of log-likelihood over positives
-        mean_log_prob_pos = (mask_pos * log_prob).sum(1) / (mask_pos.sum(1) + 1e-8)
-        
-        # Loss is negative log-likelihood
-        loss = -mean_log_prob_pos
-        loss = loss.mean()
-        
-        return loss
 
 
 class A3LISEmbeddingDataset(Dataset):
@@ -240,15 +165,12 @@ class EMATracker:
 
 
 def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optimizer,
-                ce_criterion: nn.Module, cl_criterion: nn.Module,
-                lambda_contrastive: float, ema: Optional[EMATracker],
+                ce_criterion: nn.Module, ema: Optional[EMATracker],
                 device: torch.device, epoch: int):
-    """Train for one epoch with dual loss."""
+    """Train for one epoch with cross-entropy loss."""
     model.train()
     
     total_loss = 0
-    total_ce_loss = 0
-    total_cl_loss = 0
     correct = 0
     total = 0
     
@@ -260,17 +182,11 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
         
         optimizer.zero_grad()
         
-        # Forward pass with features
-        logits, features = model(embeddings, return_features=True)
+        # Forward pass
+        logits = model(embeddings)
         
-        # Loss 1: Cross-Entropy with label smoothing
-        ce_loss = ce_criterion(logits, labels)
-        
-        # Loss 2: Supervised Contrastive Loss (SignCL)
-        cl_loss = cl_criterion(features, labels)
-        
-        # Combined loss
-        loss = ce_loss + lambda_contrastive * cl_loss
+        # Cross-Entropy with label smoothing
+        loss = ce_criterion(logits, labels)
         
         # Backward pass
         loss.backward()
@@ -282,8 +198,6 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
         
         # Track metrics
         total_loss += loss.item()
-        total_ce_loss += ce_loss.item()
-        total_cl_loss += cl_loss.item()
         
         _, predicted = logits.max(1)
         total += labels.size(0)
@@ -292,20 +206,14 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
         # Update progress bar
         pbar.set_postfix({
             'loss': f'{loss.item():.4f}',
-            'ce': f'{ce_loss.item():.4f}',
-            'cl': f'{cl_loss.item():.4f}',
             'acc': f'{100.*correct/total:.2f}%'
         })
     
     avg_loss = total_loss / len(dataloader)
-    avg_ce_loss = total_ce_loss / len(dataloader)
-    avg_cl_loss = total_cl_loss / len(dataloader)
     accuracy = 100. * correct / total
     
     return {
         'loss': avg_loss,
-        'ce_loss': avg_ce_loss,
-        'cl_loss': avg_cl_loss,
         'accuracy': accuracy
     }
 
@@ -376,37 +284,35 @@ def evaluate(model: nn.Module, dataloader: DataLoader, device: torch.device,
     }
 
 
-def train_and_evaluate_fold(
-    fold: int,
+def train_and_evaluate_standard_split(
     train_embeddings: np.ndarray,
     train_labels: List[str],
     train_signers: List[str],
+    val_embeddings: np.ndarray,
+    val_labels: List[str],
+    val_signers: List[str],
     test_embeddings: np.ndarray,
     test_labels: List[str],
     test_signers: List[str],
     label_to_idx: Dict[str, int],
     args,
     device: torch.device,
-    val_loader: Optional[DataLoader] = None,
 ):
-    """Train and evaluate on a single fold.
-
-    Args:
-        val_loader: If provided, used for per-epoch evaluation and early stopping.
-                    Final evaluation always uses the test_loader built from
-                    test_embeddings/test_labels. When None (LOSO mode), the test
-                    loader doubles as the monitoring loader.
-    """
+    """Train on train split, monitor on val split, and report final test metrics."""
     
     print(f"\n{'='*60}")
-    print(f"Fold {fold + 1}/10: Test signer = {test_signers[0]}")
+    print("Standard split training (train/val/test)")
     print(f"{'='*60}")
     print(f"Train samples: {len(train_embeddings)}")
+    print(f"Val samples: {len(val_embeddings)}")
     print(f"Test samples: {len(test_embeddings)}")
     
     # Create datasets
     train_dataset = A3LISEmbeddingDataset(
         train_embeddings, train_labels, train_signers, label_to_idx
+    )
+    val_dataset = A3LISEmbeddingDataset(
+        val_embeddings, val_labels, val_signers, label_to_idx
     )
     test_dataset = A3LISEmbeddingDataset(
         test_embeddings, test_labels, test_signers, label_to_idx
@@ -415,6 +321,10 @@ def train_and_evaluate_fold(
     # Create dataloaders
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.num_workers, pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=args.batch_size * 2, shuffle=False,
         num_workers=args.num_workers, pin_memory=True
     )
     test_loader = DataLoader(
@@ -433,9 +343,8 @@ def train_and_evaluate_fold(
         dropout=args.dropout
     ).to(device)
     
-    # Loss functions
+    # Loss function
     ce_criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
-    cl_criterion = SupervisedContrastiveLoss(temperature=args.temperature)
     
     # Optimizer
     optimizer = optim.AdamW(
@@ -452,22 +361,18 @@ def train_and_evaluate_fold(
     # EMA tracker
     ema = EMATracker(model, momentum=args.ema_momentum) if args.use_ema else None
     
-    # val_loader is used for per-epoch monitoring and early stopping when provided.
-    # In LOSO mode (val_loader=None) the test loader doubles as the monitor.
-    monitor_loader = val_loader if val_loader is not None else test_loader
-    monitor_label  = 'Val' if val_loader is not None else 'Test'
+    monitor_loader = val_loader
+    monitor_label  = 'Val'
 
-    # Training loop
+    # Training loop (always runs for full epoch budget)
     best_r_at_1 = 0
     best_epoch = 0
-    patience_counter = 0
     train_history = []
 
     for epoch in range(1, args.epochs + 1):
         # Train
         train_metrics = train_epoch(
-            model, train_loader, optimizer, ce_criterion, cl_criterion,
-            args.lambda_contrastive, ema, device, epoch
+            model, train_loader, optimizer, ce_criterion, ema, device, epoch
         )
 
         # Evaluate on monitor split (val or test) with EMA weights
@@ -486,27 +391,21 @@ def train_and_evaluate_fold(
         if eval_metrics['r@1'] > best_r_at_1:
             best_r_at_1 = eval_metrics['r@1']
             best_epoch = epoch
-            patience_counter = 0
 
-            # Save best model
-            if args.save_models:
-                save_path = Path(args.output_dir) / f'fold_{fold}_best.pt'
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'ema_shadow': ema.shadow if ema else None,
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'metrics': eval_metrics
-                }, save_path)
-        else:
-            patience_counter += 1
+            # Save best model on validation metric.
+            save_path = Path(args.output_dir) / 'best.pt'
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'ema_shadow': ema.shadow if ema else None,
+                'optimizer_state_dict': optimizer.state_dict(),
+                'metrics': eval_metrics
+            }, save_path)
 
         # Log progress
         print(f"\nEpoch {epoch}/{args.epochs}")
         print(f"  Train:   loss={train_metrics['loss']:.4f}, "
-              f"ce={train_metrics['ce_loss']:.4f}, "
-              f"cl={train_metrics['cl_loss']:.4f}, "
               f"acc={train_metrics['accuracy']:.2f}%")
         print(f"  {monitor_label+':':<6}   R@1={eval_metrics['r@1']:.4f}, "
               f"R@5={eval_metrics['r@5']:.4f}, "
@@ -520,16 +419,10 @@ def train_and_evaluate_fold(
             'train': train_metrics,
             monitor_label.lower(): eval_metrics
         })
-
-        # Early stopping
-        if args.patience > 0 and patience_counter >= args.patience:
-            print(f"\nEarly stopping triggered at epoch {epoch} "
-                  f"(no {monitor_label} R@1 improvement for {args.patience} epochs)")
-            break
     
     # Final evaluation with best EMA weights
-    if args.save_models and ema is not None:
-        checkpoint_path = Path(args.output_dir) / f'fold_{fold}_best.pt'
+    if ema is not None:
+        checkpoint_path = Path(args.output_dir) / 'best.pt'
         if checkpoint_path.exists():
             checkpoint = torch.load(checkpoint_path)
             if 'ema_shadow' in checkpoint and checkpoint['ema_shadow'] is not None:
@@ -541,7 +434,7 @@ def train_and_evaluate_fold(
     final_metrics = evaluate(model, test_loader, device, num_classes)
     
     print(f"\n{'='*60}")
-    print(f"Fold {fold + 1} Final Results (Test Signer: {test_signers[0]})")
+    print("Final Results (Test split)")
     print(f"{'='*60}")
     print(f"  R@1↑:        {final_metrics['r@1']:>7.2%}  ({final_metrics['hit_1']:>5}/{final_metrics['num_test']})")
     print(f"  R@5↑:        {final_metrics['r@5']:>7.2%}  ({final_metrics['hit_5']:>5}/{final_metrics['num_test']})")
@@ -550,8 +443,6 @@ def train_and_evaluate_fold(
     print(f"{'='*60}\n")
     
     return {
-        'fold': fold,
-        'test_signer': test_signers[0],
         'final_metrics': final_metrics,
         'best_epoch': best_epoch,
         'train_history': train_history
@@ -566,25 +457,25 @@ def run_standard_split(
     """Train on 7 signers, monitor on 1 val signer per epoch, final eval on 2 test signers.
 
     Standard practice: Train split for learning, Val split for per-epoch monitoring and
-    early stopping, Test split for final held-out evaluation.
+    best-checkpoint selection, Test split for final held-out evaluation.
 
     Returns: None (saves results to JSON)
     """
-    embeddings_dir = Path(embeddings_dir)
+    embeddings_path = Path(embeddings_dir)
 
     # --- Training data (7 signers) ---
     print("Loading training set (train signers only)...")
     train_embeddings, train_labels, _, _ = load_a3lis_embeddings(
-        embeddings_dir, split='train',
+        embeddings_path, split='train',
         label_language=args.label_language,
         use_categories=args.use_categories,
     )
     train_signers = ['unknown'] * len(train_labels)
 
-    # --- Val data (1 signer, for per-epoch monitoring + early stopping) ---
-    print("Loading val set (for epoch monitoring + early stopping)...")
+    # --- Val data (1 signer, for per-epoch monitoring + checkpoint selection) ---
+    print("Loading val set (for epoch monitoring + checkpoint selection)...")
     val_embeddings, val_labels, _, _ = load_a3lis_embeddings(
-        embeddings_dir, split='val',
+        embeddings_path, split='val',
         label_language=args.label_language,
         use_categories=args.use_categories,
     )
@@ -593,7 +484,7 @@ def run_standard_split(
     # --- Test data (final evaluation, always) ---
     print("Loading test set (for final evaluation)...")
     test_embeddings, test_labels, _, _ = load_a3lis_embeddings(
-        embeddings_dir, split='test',
+        embeddings_path, split='test',
         label_language=args.label_language,
         use_categories=args.use_categories,
     )
@@ -609,25 +500,19 @@ def run_standard_split(
     print(f"Test  samples: {len(test_embeddings)}")
     print(f"Classes:       {len(unique_labels)}")
 
-    # Build val DataLoader for per-epoch monitoring and early stopping
-    val_dataset = A3LISEmbeddingDataset(val_embeddings, val_labels, val_signers, label_to_idx)
-    val_loader = DataLoader(
-        val_dataset, batch_size=args.batch_size * 2, shuffle=False,
-        num_workers=args.num_workers, pin_memory=True
-    )
-
-    result = train_and_evaluate_fold(
-        fold=0,
+    result = train_and_evaluate_standard_split(
         train_embeddings=train_embeddings,
         train_labels=train_labels,
         train_signers=train_signers,
+        val_embeddings=val_embeddings,
+        val_labels=val_labels,
+        val_signers=val_signers,
         test_embeddings=test_embeddings,
         test_labels=test_labels,
         test_signers=test_signers,
         label_to_idx=label_to_idx,
         args=args,
         device=device,
-        val_loader=val_loader,
     )
 
     output_dir = Path(args.output_dir)
@@ -678,13 +563,8 @@ def main():
                        help='Dropout rate')
     
     # Loss function
-    parser.add_argument('--lambda_contrastive', type=float, default=0.01,
-                       help='Weight for contrastive loss (lambda)')
     parser.add_argument('--label_smoothing', type=float, default=0.1,
                        help='Label smoothing for cross-entropy')    
-    
-    parser.add_argument('--temperature', type=float, default=0.07,
-                       help='Temperature scaling for contrastive loss')
 
     # Regularization
     parser.add_argument('--use_ema', action='store_true', default=True,
@@ -692,30 +572,14 @@ def main():
     parser.add_argument('--ema_momentum', type=float, default=0.9998,
                        help='EMA momentum')
     
-    # Early stopping
-    parser.add_argument('--patience', type=int, default=10,
-                       help='Early stopping patience (epochs without improvement). Set to 0 to disable.')
-    
     # System
     parser.add_argument('--num_workers', type=int, default=4,
                        help='Number of data loading workers')
     parser.add_argument('--device', type=str, default='cuda',
                        choices=['cuda', 'cpu'],
                        help='Device to use')
-    parser.add_argument('--save_models', action='store_true',
-                       help='Save best model checkpoints')
-    
-    parser.add_argument('--no-signcl_loss', action='store_true', default=False,
-                       help='Whether to include Supervised Contrastive Loss (SignCL)')
 
     args = parser.parse_args()
-
-
-    #signcl_loss false overrides lambda_contrastive to 0
-    if args.no_signcl_loss:
-        args.lambda_contrastive = 0.0
-        print("\nSupervised Contrastive Loss (SignCL) disabled. "
-              "Lambda for contrastive loss set to 0.\n")
     
     # Setup device
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
