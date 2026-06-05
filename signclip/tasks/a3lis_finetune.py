@@ -256,7 +256,7 @@ class fineTuneA3LIS(RetriTask):
             pretokenized_labels_path=PRETOKENIZED_LABELS_PATH
         )
 
-        batch_size = getattr(config.fairseq.dataset, 'batch_size', 128)
+        batch_size = getattr(config.fairseq.dataset, 'batch_size', 16)
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
         # BALANCED BATCH SAMPLER
