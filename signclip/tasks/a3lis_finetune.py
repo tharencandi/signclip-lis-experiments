@@ -591,7 +591,7 @@ class fineTuneA3LIS(RetriTask):
         # ==========================================
         # 1. GRADIENT ACCUMULATION SETUP
         # ==========================================
-        accumulation_steps = 4  # Batch size in yaml * this = actual batch. Put to 1 if small batch and not accumulation
+        accumulation_steps = 1  # Batch size in yaml * this = actual batch. Put to 1 if small batch and not accumulation
         
         # Clear gradients once at the very beginning of the epoch
         if not skip_backprop:

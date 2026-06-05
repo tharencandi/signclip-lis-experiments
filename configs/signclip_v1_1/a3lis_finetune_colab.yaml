@@ -35,7 +35,7 @@ fairseq:
     log_interval: 1000
   dataset:
     num_workers: 2
-    batch_size: 32
+    batch_size: 128 # This gets multiplied with accumulation_steps in .py to get actual batch
   optimization:
     lr:
     - 5.0e-05
