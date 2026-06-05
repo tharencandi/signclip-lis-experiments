@@ -164,8 +164,8 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        #self.nce_loss = MMContraLoss() # SignClip loss
-        self.supcon_loss = CrossModalSupConLoss() # SupCon loss
+        self.nce_loss = MMContraLoss() # SignClip loss
+        #self.supcon_loss = CrossModalSupConLoss() # SupCon loss
         #self.supcon_loss = VideoSupConLoss(temperature = 0.07) # Regularizer SupCon loss
         #self.supcon_weight = 0.2 # Regularizer SupCon loss
 
@@ -367,34 +367,38 @@ class fineTuneA3LIS(RetriTask):
             return self.model.logit_scale.exp()
         return 14.28  # default: 1 / 0.07
 
-    # Original one, gemini says this:
-    # I am also fixing a tiny math bug in your original code here. 
-    # Your original code multiplied logit_scale into both embeddings 
-    # before passing them to the loss. When the loss takes the dot product, 
-    # that accidentally squares the temperature scale! 
-    # The standard way is to multiply the scale into the embeddings only once.
-    '''
+    # infoNCE / MMContraLoss / Signclip original one: 
+    
     def _batch_nce_and_sim(self, output, label_tensor):
         """Batch-local bidirectional NCE loss (MMContraLoss) + 147-class sim_matrix.
 
         Uses MMContraLoss from nce.py — identical to the SignCLIP pretraining objective.
-        Embeddings are L2-normalised and scaled by logit_scale before the loss,
-        consistent with how the pretrained model was trained.
+        Embeddings are L2-normalised, and the logit_scale is applied to ONLY the video
+        to prevent squaring the temperature during the dot product.
         Metrics sim_matrix is computed against all 147 frozen class embeddings.
         """
         logit_scale       = self._get_logit_scale()
-        video_embeds      = logit_scale * F.normalize(output["pooled_video"], p=2, dim=-1)  # [N x D]
-        text_embeds_batch = logit_scale * F.normalize(output["pooled_text"],  p=2, dim=-1)  # [N x D]
-        text_embeds_all   = self.all_text_embeds.to(self.device)                            # [147 x D]
+        
+        # 1. Normalize BOTH modalities, but do not scale them yet
+        raw_video_embeds  = F.normalize(output["pooled_video"], p=2, dim=-1)  # [N x D]
+        raw_text_batch    = F.normalize(output["pooled_text"],  p=2, dim=-1)  # [N x D]
+        text_embeds_all   = self.all_text_embeds.to(self.device)              # [147 x D] (Already normalized)
 
-        loss = self.nce_loss(video_embeds, text_embeds_batch)
+        # 2. Scale ONLY ONE of the modalities (Video)
+        scaled_video = logit_scale * raw_video_embeds
+        
+        # 3. Pass one SCALED and one RAW embedding to the loss.
+        # The internal dot product will naturally be: (scale * video) @ raw_text.T
+        loss = self.nce_loss(scaled_video, raw_text_batch)
 
-        # 147-class sim_matrix for retrieval metrics only (logit_scale already baked in)
-        sim_matrix = video_embeds @ text_embeds_all.t()  # [N x 147]
+        # 4. 147-class sim_matrix for retrieval metrics
+        # Because text_embeds_all is raw/unscaled, this also safely applies the scale exactly once.
+        sim_matrix = scaled_video @ text_embeds_all.t()  # [N x 147]
+        
         return sim_matrix, loss
-    '''
-    # For Supervised contrastive loss
     
+    # For Supervised contrastive loss
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale       = self._get_logit_scale()
         
@@ -414,7 +418,7 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()
         
         return sim_matrix, loss
-    
+    '''
     # Original + SupCon as a regulizer term
     '''
     def _batch_nce_and_sim(self, output, label_tensor):
