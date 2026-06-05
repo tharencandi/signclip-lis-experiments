@@ -151,6 +151,7 @@ class fineTuneA3LIS(RetriTask):
         trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.model.parameters())
         print(f"Trainable parameters: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
+        
         # USED FOR EVERYTHING ELSE
         
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
@@ -587,9 +588,17 @@ class fineTuneA3LIS(RetriTask):
         recall_at_1 = recall_at_5 = recall_at_10 = 0
         total_samples = 0
 
+        # ==========================================
+        # 1. GRADIENT ACCUMULATION SETUP
+        # ==========================================
+        accumulation_steps = 4  # Batch size in yaml * this = actual batch. Put to 1 if small batch and not accumulation
+        
+        # Clear gradients once at the very beginning of the epoch
+        if not skip_backprop:
+            self.optimizer.zero_grad()
 
         pbar = tqdm(self.train_data, desc="Train", dynamic_ncols=True, leave=False)
-        for batch in pbar:
+        for batch_idx, batch in enumerate(pbar):
             batch = self.move_to_device(batch)
             output = self.model(batch['caps'], batch['cmasks'], batch['pose'], batch['vmasks'])
 
@@ -597,9 +606,23 @@ class fineTuneA3LIS(RetriTask):
             total_loss += loss.item()
 
             if not skip_backprop:
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+                # ==========================================
+                # 2. SCALE AND ACCUMULATE
+                # ==========================================
+                # Scale the loss down so the accumulated gradients equal an average, not a massive sum
+                scaled_loss = loss / accumulation_steps
+                
+                # Calculate gradients and ADD them to the pool
+                scaled_loss.backward()
+
+                # ==========================================
+                # 3. CONDITIONAL OPTIMIZER STEP
+                # ==========================================
+                # Only step the optimizer every 4 batches OR on the very last batch of the epoch
+                if ((batch_idx + 1) % accumulation_steps == 0) or ((batch_idx + 1) == len(self.train_data)):
+                    self.optimizer.step()
+                    self.optimizer.zero_grad() # Clear the pool for the next 4 steps
+
 
             r1, r5, r10, medK, ranks = self._retrieval_metrics(sim_matrix, batch['label'])
             # Accumulate weighted by batch size for correct epoch-level averages
