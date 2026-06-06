@@ -46,7 +46,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.base import BaseEstimator, ClassifierMixin
 from src.embedding_utils import load_a3lis_embeddings, load_all_embeddings_with_signers
-
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 # Add project root to path for signclip imports
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
@@ -325,55 +326,50 @@ def evaluate_few_shot(
         test_categories = [test_categories[i] for i in range(len(test_categories)) if mask[i]]
         print(f"  Filtered test samples: {len(test_labels)}")
     
-    # Normalize embeddings for cosine similarity
-    print("\nNormalizing embeddings...")
-    # train_embeddings_norm = train_embeddings / np.linalg.norm(train_embeddings, axis=1, keepdims=True)
-    # test_embeddings_norm = test_embeddings / np.linalg.norm(test_embeddings, axis=1, keepdims=True)
-    
-    train_embeddings_norm = train_embeddings 
-    test_embeddings_norm = test_embeddings# 
-    
     # Train and evaluate based on method
+    k = None
     if method == 'knn':
         # K = num_shots when shot-limited (K=1 for 1-shot, K=5 for 5-shot).
         # K = num_classes when using the full training set (paper standard).
         k = num_shots if num_shots is not None else len(common_classes)
         k = min(k, len(train_labels))  # guard against edge cases
-        print(f"\nTraining KNN classifier (K={k})...")
-        clf = KNeighborsClassifier(n_neighbors=k, metric='cosine')
-        clf.fit(train_embeddings_norm, train_labels)
+        
+        #use default metric - euclidean distance for KNN
+        clf = Pipeline(
+            steps = [("scaler", StandardScaler()), ("knn", KNeighborsClassifier(n_neighbors=k))]
+        )
+        clf.fit(train_embeddings, train_labels)
+
+
         
     elif method == 'linear_probe':
         print("\nTraining Logistic Regression (default scikit-learn settings)...")
         # Default scikit-learn LogisticRegression settings
         clf = LogisticRegression(verbose= True,random_state=seed, max_iter=100)
-        clf.fit(train_embeddings_norm, train_labels)
+        clf.fit(train_embeddings, train_labels)
     
     elif method == 'svm':
         print("\nTraining SVM with RBF kernel (advanced non-linear classifier)...")
         # SVM with RBF kernel for non-linear decision boundaries
         # Using probability=True to enable predict_proba for ranking
         clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
-        clf.fit(train_embeddings_norm, train_labels)
+        clf.fit(train_embeddings, train_labels)
 
     else:
         raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', or 'ensemble'")
     
     # Predict on test set
     print("\nEvaluating on test set...")
-    predictions = clf.predict(test_embeddings_norm)
+    predictions = clf.predict(test_embeddings)
     
     # If method supports probability, get confidence scores
+    probabilities = None
     if hasattr(clf, 'decision_function'):
         # Use raw geometric distances (Fixes the SVM sorting bug!)
-        probabilities = clf.decision_function(test_embeddings_norm)
+        probabilities = clf.decision_function(test_embeddings)
     elif hasattr(clf, 'predict_proba'):
-        probabilities = clf.predict_proba(test_embeddings_norm)
-    else:
-        # For KNN with cosine, get distances for ranking
-        distances, indices = clf.kneighbors(test_embeddings_norm)
-        # Use negative distance as score (closer = higher score)
-        probabilities = None
+        probabilities = clf.predict_proba(test_embeddings) # for linear_probe and knn
+ 
 
     # Calculate metrics
     hit_1 = 0
@@ -406,7 +402,7 @@ def evaluate_few_shot(
         else:
             # For KNN without proba, we'll use a different approach
             # Compute similarity to all training examples and aggregate by class
-            similarities = np.dot(train_embeddings_norm, test_embeddings_norm[i])
+            similarities = np.dot(train_embeddings, test_embeddings[i])
             class_scores = defaultdict(list)
             for j, label in enumerate(train_labels):
                 class_scores[label].append(similarities[j])
@@ -449,8 +445,8 @@ def evaluate_few_shot(
     print(f"Eval samples: {num_test}")
     print(f"Classes: {len(common_classes)}")
     print(f"Avg examples per class: {avg_examples_per_class:.1f}")
-    if method == 'knn':
-        print(f"K (neighbors): {len(common_classes)}")
+    if method == 'knn' and k is not None:
+        print(f"K (neighbors): {k}")
     elif method == 'svm':
         print(f"Kernel: RBF (Radial Basis Function)")
     print(f"Seed: {seed}")
@@ -489,7 +485,7 @@ def evaluate_few_shot(
             top5_scores = [probabilities[i][idx] for idx in sorted_indices[:5]]
         else:
             # Use similarity-based ranking
-            similarities = np.dot(train_embeddings_norm, test_embeddings_norm[i])
+            similarities = np.dot(train_embeddings, test_embeddings[i])
             class_scores = defaultdict(list)
             for j, label in enumerate(train_labels):
                 class_scores[label].append(similarities[j])
@@ -553,36 +549,34 @@ def evaluate_single_fold(
     unique_classes = sorted(set(train_labels))
     num_classes = len(unique_classes)
     
-    # Normalize embeddings
-    train_embeddings_norm = train_embeddings / np.linalg.norm(train_embeddings, axis=1, keepdims=True)
-    test_embeddings_norm = test_embeddings / np.linalg.norm(test_embeddings, axis=1, keepdims=True)
-    
     # Train classifier
     if method == 'knn':
-        clf = KNeighborsClassifier(n_neighbors=num_classes, metric='cosine')
-        clf.fit(train_embeddings_norm, train_labels)
+        clf = Pipeline(
+            steps=[("scaler", StandardScaler()), ("knn", KNeighborsClassifier(n_neighbors=num_classes))]
+        )
+        clf.fit(train_embeddings, train_labels)
     elif method == 'linear_probe':
         clf = LogisticRegression(random_state=seed, max_iter=1000)
-        clf.fit(train_embeddings_norm, train_labels)
+        clf.fit(train_embeddings, train_labels)
     elif method == 'svm':
         clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
-        clf.fit(train_embeddings_norm, train_labels)
+        clf.fit(train_embeddings, train_labels)
     elif method == "ensemble":
         # Placeholder for ensemble method (to be implemented)
         clf = EnsembleClassifier([
             LogisticRegression(random_state=seed, max_iter=1000),
             SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
         ])
-        clf.fit(train_embeddings_norm, train_labels)
+        clf.fit(train_embeddings, train_labels)
     else:
         raise ValueError(f"Unknown method: {method}")
     
     # Predict
-    predictions = clf.predict(test_embeddings_norm)
+    predictions = clf.predict(test_embeddings)
     
     # Get ranked predictions
     if hasattr(clf, 'predict_proba'):
-        probabilities = clf.predict_proba(test_embeddings_norm)
+        probabilities = clf.predict_proba(test_embeddings)
         class_labels = clf.classes_
     else:
         probabilities = None
@@ -604,7 +598,7 @@ def evaluate_single_fold(
             ranked_labels = [class_labels[idx] for idx in sorted_indices]
         else:
             # KNN: aggregate similarities by class
-            similarities = np.dot(train_embeddings_norm, test_embeddings_norm[i])
+            similarities = np.dot(train_embeddings, test_embeddings[i])
             class_scores = defaultdict(list)
             for j, label in enumerate(train_labels):
                 class_scores[label].append(similarities[j])
