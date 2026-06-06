@@ -164,10 +164,10 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        #self.nce_loss = MMContraLoss() # SignClip loss
-        self.supcon_loss = CrossModalSupConLoss() # SupCon loss
-        #self.supcon_loss = VideoSupConLoss(temperature = 0.07) # Regularizer SupCon loss
-        #self.supcon_weight = 0.2 # Regularizer SupCon loss
+        self.nce_loss = MMContraLoss() # SignClip loss
+        #self.supcon_loss = CrossModalSupConLoss() # SupCon loss
+        self.supcon_loss = VideoSupConLoss(temperature = 0.07) # Regularizer SupCon loss
+        self.supcon_weight = 0.2 # Regularizer SupCon loss
 
         max_text_len = getattr(config.dataset, 'max_len', 64)
         
@@ -398,7 +398,7 @@ class fineTuneA3LIS(RetriTask):
         return sim_matrix, loss
     '''
     # For Supervised contrastive loss
-    
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale       = self._get_logit_scale()
         
@@ -418,9 +418,9 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()
         
         return sim_matrix, loss
-    
-    # Original + SupCon as a regulizer term
     '''
+    # Original + SupCon as a regulizer term
+    
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale       = self._get_logit_scale()
         
@@ -446,7 +446,7 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()
         
         return sim_matrix, total_loss
-    '''
+    
     # CROSS-ENTROPY
     '''
     def _batch_nce_and_sim(self, output, label_tensor):
