@@ -44,51 +44,13 @@ from tqdm import tqdm
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
-from sklearn.base import BaseEstimator, ClassifierMixin
 from src.embedding_utils import load_a3lis_embeddings, load_all_embeddings_with_signers
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 # Add project root to path for signclip imports
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
-
-
-class EnsembleClassifier(BaseEstimator, ClassifierMixin):
-    def __init__(self, models):
-        self.models = models
-    def fit(self, X, y):
-        for model in self.models:
-            model.fit(X, y)
-        self.classes_ = self.models[0].classes_ #same for all models
-        return self
-    def predict_majority(self, X):
-        predicted_classes_and_confidence = []
-        for model in self.models:
-            if hasattr(model, 'predict_proba'):
-                predicted_class = model.classes_[np.argmax(model.predict_proba(X), axis=1)] 
-                predicted_classes_and_confidence.append((predicted_class, model.predict_proba(X)))
-            else:
-                predicted_class = model.predict(X)
-                predicted_classes_and_confidence.append((predicted_class, 0.0))
-        # Majority vote (highest confidence if tie)
-        final_predictions = []
-        for i in range(len(X)):
-            votes = defaultdict(float)
-            for pred_class, conf in predicted_classes_and_confidence:
-                if conf is not None:
-                    votes[pred_class[i]] += np.max(conf[i])  # Add confidence score
-                else:
-                    votes[pred_class[i]] += 1  # Just count vote
-            # Get class with highest vote (and confidence as tiebreaker)
-            best_class = max(votes.items(), key=lambda x: (x[1], x[0]))[0]
-            final_predictions.append(best_class)
-      
-        return final_predictions
-
-    def predict(self, X):
-        
-        return self.predict_majority(X)
 
 
 def load_a3lis_embeddings(embedding_dir: Path, split: str, label_language: str = 'english', use_categories: bool = False):
@@ -356,7 +318,7 @@ def evaluate_few_shot(
         clf.fit(train_embeddings, train_labels)
 
     else:
-        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', or 'ensemble'")
+        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', or 'svm'")
     
     # Predict on test set
     print("\nEvaluating on test set...")
@@ -561,15 +523,8 @@ def evaluate_single_fold(
     elif method == 'svm':
         clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
         clf.fit(train_embeddings, train_labels)
-    elif method == "ensemble":
-        # Placeholder for ensemble method (to be implemented)
-        clf = EnsembleClassifier([
-            LogisticRegression(random_state=seed, max_iter=1000),
-            SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
-        ])
-        clf.fit(train_embeddings, train_labels)
     else:
-        raise ValueError(f"Unknown method: {method}")
+        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', or 'svm'")
     
     # Predict
     predictions = clf.predict(test_embeddings)
@@ -816,7 +771,7 @@ Methods:
     parser.add_argument('--pose_embeddings_dir', type=str, required=True,
                         help='Directory containing precomputed pose .npy embeddings')
     parser.add_argument('--method', type=str, required=True,
-                        choices=['knn', 'linear_probe', 'svm', 'ensemble'],
+                        choices=['knn', 'linear_probe', 'svm'],
                         help='Few-shot method to use')
     parser.add_argument('--label_language', type=str, default='english',
                         choices=['italian', 'english'],
