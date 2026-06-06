@@ -78,12 +78,12 @@ def load_a3lis_embeddings(embedding_dir: Path, split: str = 'test', label_langua
     
     Args:
         embedding_dir: Directory containing .npy embedding files and metadata
-        split: 'train' or 'test'
+        split: 'train', 'val', 'test', or 'all' (all splits combined)
         label_language: 'italian' or 'english' for label selection
         use_categories: If True, use macro categories instead of micro labels
     
     Returns:
-        Tuple of (embeddings_array, labels_list, filenames_list, all_labels)
+        Tuple of (embeddings_array, labels_list, filenames_list, all_labels, categories, signers)
         all_labels is the set of unique labels for text embedding generation
     """
     # Load metadata
@@ -99,11 +99,12 @@ def load_a3lis_embeddings(embedding_dir: Path, split: str = 'test', label_langua
     filenames = []
     all_labels = set()
     categories = []
+    signers = []
     
     # Process each embedding in metadata
     for item in tqdm(metadata['embeddings'], desc=f"Loading {split} embeddings"):
-        # Filter by split
-        if item['split'] != split:
+        # Filter by split ('all' loads everything)
+        if split != 'all' and item['split'] != split:
             continue
         
         # Get label based on use_categories flag
@@ -130,10 +131,11 @@ def load_a3lis_embeddings(embedding_dir: Path, split: str = 'test', label_langua
         filenames.append(item['embedding_file'])
         all_labels.add(label)
         categories.append(item.get('category', 'unknown'))
+        signers.append(item.get('signer', 'unknown'))
     
     embeddings_array = np.array(embeddings) if embeddings else np.array([])
     
-    return embeddings_array, labels, filenames, sorted(all_labels), categories
+    return embeddings_array, labels, filenames, sorted(all_labels), categories, signers
 
 
 def load_text_embeddings(text_embeddings_path: str, metadata_path: str):
@@ -254,7 +256,8 @@ def evaluate_zero_shot(
     legacy_format: bool = False,
     label_type: str = 'micro',
     use_categories: bool = False,
-    output_dir: str = None
+    output_dir: str = None,
+    class_eval: bool = False
 ):
     """
     Perform zero-shot evaluation using precomputed embeddings.
@@ -271,6 +274,7 @@ def evaluate_zero_shot(
         legacy_format: Use legacy filename parsing instead of metadata
         label_type: 'micro' or 'macro' for legacy format
         use_categories: Use macro categories instead of micro labels (A3LIS only)
+        class_eval: Print per-class retrieval metrics table
     """
     print(f"\n{'='*60}")
     print(f"Zero-Shot Evaluation (Precomputed Embeddings)")
@@ -299,6 +303,8 @@ def evaluate_zero_shot(
         pose_embeddings, pose_labels, filenames = load_pose_embeddings_for_split(
             embedding_dir, split, label_type
         )
+        pose_categories = ['unknown'] * len(pose_labels)
+        pose_signers = ['unknown'] * len(pose_labels)
     
     else:
         # A3LIS mode: use metadata.json
@@ -310,7 +316,7 @@ def evaluate_zero_shot(
         
         # Load pose embeddings from A3LIS format
         print(f"\nLoading pose embeddings from {pose_embeddings_dir}...")
-        pose_embeddings, pose_labels, filenames, unique_labels, pose_categories = load_a3lis_embeddings(
+        pose_embeddings, pose_labels, filenames, unique_labels, pose_categories, pose_signers = load_a3lis_embeddings(
             embedding_dir, split, label_language, use_categories
         )
         
@@ -382,37 +388,62 @@ def evaluate_zero_shot(
     ranks = []
 
     category_stats = {}
+    signer_stats = {}
+    class_stats = {}
     
     print("Evaluating predictions...")
     for i, gold_label in enumerate(tqdm(pose_labels, desc="Ranking")):
         
         cat = pose_categories[i] if not legacy_format else "unknown"
+        signer = pose_signers[i] if not legacy_format else "unknown"
+
         if cat not in category_stats:
-            # Now we track 1, 5, 10, and all ranks for the median!
             category_stats[cat] = {'total': 0, 'hit_1': 0, 'hit_5': 0, 'hit_10': 0, 'ranks': []}
+        if signer not in signer_stats:
+            signer_stats[signer] = {'total': 0, 'hit_1': 0, 'hit_5': 0, 'hit_10': 0, 'ranks': []}
+        if class_eval and gold_label not in class_stats:
+            class_stats[gold_label] = {'total': 0, 'hit_1': 0, 'hit_5': 0, 'hit_10': 0, 'ranks': []}
         
         category_stats[cat]['total'] += 1
+        signer_stats[signer]['total'] += 1
+        if class_eval:
+            class_stats[gold_label]['total'] += 1
 
         ranked_labels = [text_labels[idx] for idx in ranked_indices[i]]
         
         if gold_label in ranked_labels[:1]:
             hit_1 += 1
             category_stats[cat]['hit_1'] += 1
+            signer_stats[signer]['hit_1'] += 1
+            if class_eval:
+                class_stats[gold_label]['hit_1'] += 1
         if gold_label in ranked_labels[:5]:
             hit_5 += 1
             category_stats[cat]['hit_5'] += 1
+            signer_stats[signer]['hit_5'] += 1
+            if class_eval:
+                class_stats[gold_label]['hit_5'] += 1
         if gold_label in ranked_labels[:10]:
             hit_10 += 1
             category_stats[cat]['hit_10'] += 1
+            signer_stats[signer]['hit_10'] += 1
+            if class_eval:
+                class_stats[gold_label]['hit_10'] += 1
             
         if gold_label in ranked_labels:
             rank = ranked_labels.index(gold_label)
             ranks.append(rank)
             category_stats[cat]['ranks'].append(rank)
+            signer_stats[signer]['ranks'].append(rank)
+            if class_eval:
+                class_stats[gold_label]['ranks'].append(rank)
         else:
             # Gold label not in text labels
             ranks.append(len(text_labels))
             category_stats[cat]['ranks'].append(len(text_labels))
+            signer_stats[signer]['ranks'].append(len(text_labels))
+            if class_eval:
+                class_stats[gold_label]['ranks'].append(len(text_labels))
     
     # Calculate metrics
     num_test = len(pose_labels)
@@ -456,10 +487,51 @@ def evaluate_zero_shot(
             r1 = stats['hit_1'] / tot
             r5 = stats['hit_5'] / tot
             r10 = stats['hit_10'] / tot
-            # Calculate median rank for this specific category
             med_r = statistics.median(stats['ranks']) + 1 if stats['ranks'] else 0.0
             
             print(f"  {cat:<18} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
+
+    if split == 'all' and not legacy_format:
+        print(f"\n{'='*75}")
+        print(f"Metrics by Signer (signer variability)")
+        print(f"{'='*75}")
+        print(f"  {'Signer':<10} | {'Total':<5} | {'R@1':<7} | {'R@5':<7} | {'R@10':<7} | {'MedianR':<7}")
+        print(f"  {'-'*10}-+-{'-'*5}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}")
+
+        signer_r1_values = []
+        for sgn, stats in sorted(signer_stats.items()):
+            tot = stats['total']
+            r1 = stats['hit_1'] / tot
+            r5 = stats['hit_5'] / tot
+            r10 = stats['hit_10'] / tot
+            med_r = statistics.median(stats['ranks']) + 1 if stats['ranks'] else 0.0
+            signer_r1_values.append(r1)
+            print(f"  {sgn:<10} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
+
+        if len(signer_r1_values) > 1:
+            import statistics as _st
+            print(f"  {'─'*10}─┼─{'─'*5}─┼─{'─'*7}─┼─{'─'*7}─┼─{'─'*7}─┼─{'─'*7}")
+            print(f"  {'Mean':<10} | {'':5} | {_st.mean(signer_r1_values):>6.1%} |")
+            print(f"  {'Std':<10} | {'':5} | {_st.stdev(signer_r1_values):>6.1%} |")
+            print(f"  {'Min':<10} | {'':5} | {min(signer_r1_values):>6.1%} |")
+            print(f"  {'Max':<10} | {'':5} | {max(signer_r1_values):>6.1%} |")
+
+    if class_eval:
+        print(f"\n{'='*90}")
+        print(f"Metrics by Class Label")
+        print(f"{'='*90}")
+        print(f"  {'Class':<35} | {'Total':<5} | {'R@1':<7} | {'R@5':<7} | {'R@10':<7} | {'MedianR':<7}")
+        print(f"  {'-'*35}-+-{'-'*5}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}")
+
+        for cls, stats in sorted(class_stats.items()):
+            tot = stats['total']
+            r1 = stats['hit_1'] / tot
+            r5 = stats['hit_5'] / tot
+            r10 = stats['hit_10'] / tot
+            med_r = statistics.median(stats['ranks']) + 1 if stats['ranks'] else 0.0
+            cls_display = cls[:35]
+            print(f"  {cls_display:<35} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
+
     print(f"{'='*75}\n")
     
     # Show some example predictions
@@ -497,8 +569,21 @@ def evaluate_zero_shot(
         'use_categories': use_categories,
         'model_name': model_name,
         'pose_embeddings_dir': pose_embeddings_dir,
+        'class_eval': class_eval,
         'timestamp': datetime.now().isoformat()
     }
+
+    if class_eval:
+        results['class_metrics'] = {
+            cls: {
+                'total': stats['total'],
+                'recall@1': stats['hit_1'] / stats['total'],
+                'recall@5': stats['hit_5'] / stats['total'],
+                'recall@10': stats['hit_10'] / stats['total'],
+                'median_rank': (statistics.median(stats['ranks']) + 1) if stats['ranks'] else 0.0,
+            }
+            for cls, stats in sorted(class_stats.items())
+        }
     
     # Save results to JSON if output_dir specified
     if output_dir:
@@ -561,8 +646,8 @@ Available prompt types:
     parser.add_argument('--use_categories', action='store_true',
                         help='Use macro categories instead of micro labels (A3LIS only)')
     parser.add_argument('--split', type=str, default='test',
-                        choices=['train', 'val', 'test'],
-                        help='Which split to evaluate. For fair comparison with fine-tuned model, use test.')
+                        choices=['train', 'val', 'test', 'all'],
+                        help='Which split to evaluate. Use all for full-dataset evaluation with signer variability breakdown.')
     parser.add_argument('--model_name', type=str, default='default',
                         choices=['default', 'asl_citizen', 'asl_finetune', 'suisse', 'a3lis_finetune'],
                         help='SignCLIP model for text embedding generation')
@@ -578,6 +663,8 @@ Available prompt types:
                         help='Label granularity (legacy format only)')
     parser.add_argument('--output_dir', type=str, default='runs/zero_shot',
                         help='Output directory for results JSON (default: runs/zero_shot)')
+    parser.add_argument('--class_eval', action='store_true',
+                        help='Print per-class retrieval metrics and save per-class metrics to JSON')
     
     args = parser.parse_args()
     
@@ -593,7 +680,8 @@ Available prompt types:
         legacy_format=args.legacy_format,
         label_type=args.label_type,
         use_categories=args.use_categories,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        class_eval=args.class_eval
     )
 
 
