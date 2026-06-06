@@ -5,6 +5,7 @@ Implements three few-shot approaches:
 1. K-Nearest Neighbors (KNN): Nonparametric classification using K=num_classes
 2. Linear Probe: Logistic regression trained on frozen embeddings
 3. SVM (Advanced): Support Vector Machine with RBF kernel for non-linear classification
+4. MLP (Standard): Scikit-learn MLP classifier with SmartHead-like hidden widths
 
 For A3LIS dataset:
 - Standard mode: Uses predefined 70/30 split (7 train signers, 3 test signers)
@@ -43,6 +44,7 @@ from collections import defaultdict
 from tqdm import tqdm
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from src.embedding_utils import load_a3lis_embeddings, load_all_embeddings_with_signers
 from sklearn.pipeline import Pipeline
@@ -184,16 +186,17 @@ def evaluate_few_shot(
     eval_split: str = 'test',
     num_shots: int = None,
     output_dir: str = None,
-    max_iter: int = 100
+    max_iter: int = 100,
+    mlp_validation_fraction: float = 0.1,
 ):
     """
-    Perform few-shot evaluation using KNN or Linear Probe.
+    Perform few-shot evaluation using KNN, linear probe, SVM, or MLP.
     
     For A3LIS: Uses signer-independent split with ~7 training examples per class.
     
     Args:
         pose_embeddings_dir: Directory containing precomputed pose embeddings
-        method: 'knn', 'linear_probe', or 'svm'
+        method: 'knn', 'linear_probe', 'svm', or 'mlp'
         label_language: 'italian' or 'english' for A3LIS labels
         seed: Random seed for reproducibility
         use_categories: Use macro categories instead of micro labels
@@ -318,8 +321,27 @@ def evaluate_few_shot(
         clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=max_iter)
         clf.fit(train_embeddings, train_labels)
 
+    elif method == 'mlp':
+        input_dim = train_embeddings.shape[1]
+        hidden_sizes = (input_dim * 2,)
+        print(
+            f"\nTraining MLP classifier (hidden layers: {hidden_sizes}, "
+            f"validation_fraction={mlp_validation_fraction})..."
+        )
+        clf = MLPClassifier(
+            hidden_layer_sizes=hidden_sizes,
+            activation='relu',
+            solver='adam',
+            early_stopping=True,
+            validation_fraction=mlp_validation_fraction,
+            n_iter_no_change=10,
+            max_iter=max_iter,
+            random_state=seed,
+        )
+        clf.fit(train_embeddings, train_labels)
+
     else:
-        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', or 'svm'")
+        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', or 'mlp'")
     
     # Predict on test set
     print("\nEvaluating on test set...")
@@ -327,11 +349,11 @@ def evaluate_few_shot(
     
     # If method supports probability, get confidence scores
     probabilities = None
-    if hasattr(clf, 'decision_function'):
-        # Use raw geometric distances (Fixes the SVM sorting bug!)
-        probabilities = clf.decision_function(test_embeddings)
-    elif hasattr(clf, 'predict_proba'):
-        probabilities = clf.predict_proba(test_embeddings) # for linear_probe and knn
+    if method == 'svm':
+        # Use raw geometric distances for SVM ranking.
+        probabilities = getattr(clf, 'decision_function')(test_embeddings)
+    elif method in {'knn', 'linear_probe', 'mlp'}:
+        probabilities = clf.predict_proba(test_embeddings)
  
 
     # Calculate metrics
@@ -636,11 +658,11 @@ def run_loso_cross_validation(
     
     embedding_dir = Path(pose_embeddings_dir)
     
-    # Load all data with signer information, excluding the val split so the
-    # val signer (mrla) never appears in any fold's training set.
+    # Load all data with signer information, excluding only unknown split.
+    # This includes the val signer in LOSO folds.
     embeddings, labels, signers, filenames = load_all_embeddings_with_signers(
         embedding_dir, label_language, use_categories,
-        exclude_splits=['val', 'unknown']
+        exclude_splits=['unknown']
     )
     
     unique_signers = sorted(set(signers))
@@ -766,15 +788,16 @@ Examples:
       --fold 0
 
 Methods:
-  knn          - K-Nearest Neighbors (K=num_classes, cosine similarity)
+    knn          - K-Nearest Neighbors (K=num_classes, StandardScaler + euclidean)
   linear_probe - Logistic Regression (default scikit-learn settings)
   svm          - Support Vector Machine with RBF kernel (advanced non-linear)
+    mlp          - Scikit-learn MLP with SmartHead-like hidden widths
 """
     )
     parser.add_argument('--pose_embeddings_dir', type=str, required=True,
                         help='Directory containing precomputed pose .npy embeddings')
     parser.add_argument('--method', type=str, required=True,
-                        choices=['knn', 'linear_probe', 'svm'],
+                        choices=['knn', 'linear_probe', 'svm', 'mlp'],
                         help='Few-shot method to use')
     parser.add_argument('--label_language', type=str, default='english',
                         choices=['italian', 'english'],
@@ -814,11 +837,15 @@ Methods:
                             'Ignored in LOSO mode.'
                         ))
     parser.add_argument('--max_iter', type=int, default=100, dest='max_iter',
-                        help='Maximum number of iterations for logistic regression and SVM (default: 100 for paper replicability).')
+                        help='Maximum iterations for linear_probe, svm, and mlp (default: 100).')
+    parser.add_argument('--mlp_validation_fraction', type=float, default=0.1,
+                        help='Validation fraction used by sklearn MLP early stopping (default: 0.1).')
         
     args = parser.parse_args()
 
     if args.loso:
+        if args.method == 'mlp':
+            raise ValueError("method='mlp' is currently supported only in standard split mode (without --loso).")
         # Run LOSO cross-validation
         run_loso_cross_validation(
             pose_embeddings_dir=args.pose_embeddings_dir,
@@ -842,7 +869,8 @@ Methods:
             eval_split=args.eval_split,
             num_shots=args.num_shots,
             output_dir=args.output_dir,
-            max_iter = args.max_iter
+            max_iter=args.max_iter,
+            mlp_validation_fraction=args.mlp_validation_fraction,
         )
 
 
