@@ -184,6 +184,7 @@ def evaluate_few_shot(
     eval_split: str = 'test',
     num_shots: int = None,
     output_dir: str = None,
+    max_iter: int = 100
 ):
     """
     Perform few-shot evaluation using KNN or Linear Probe.
@@ -307,14 +308,14 @@ def evaluate_few_shot(
     elif method == 'linear_probe':
         print("\nTraining Logistic Regression (default scikit-learn settings)...")
         # Default scikit-learn LogisticRegression settings
-        clf = LogisticRegression(verbose= True,random_state=seed, max_iter=100)
+        clf = LogisticRegression(verbose= True,random_state=seed, max_iter=max_iter)
         clf.fit(train_embeddings, train_labels)
     
     elif method == 'svm':
         print("\nTraining SVM with RBF kernel (advanced non-linear classifier)...")
         # SVM with RBF kernel for non-linear decision boundaries
         # Using probability=True to enable predict_proba for ranking
-        clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
+        clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=max_iter)
         clf.fit(train_embeddings, train_labels)
 
     else:
@@ -505,6 +506,7 @@ def evaluate_single_fold(
     test_signer: str,
     method: str,
     seed: int,
+    max_iter: int = 100
 ):
     """Evaluate a single LOSO fold."""
     
@@ -518,10 +520,10 @@ def evaluate_single_fold(
         )
         clf.fit(train_embeddings, train_labels)
     elif method == 'linear_probe':
-        clf = LogisticRegression(random_state=seed, max_iter=1000)
+        clf = LogisticRegression(random_state=seed, max_iter=max_iter)
         clf.fit(train_embeddings, train_labels)
     elif method == 'svm':
-        clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=1000)
+        clf = SVC(kernel='rbf', random_state=seed, probability=True, max_iter=max_iter)
         clf.fit(train_embeddings, train_labels)
     else:
         raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', or 'svm'")
@@ -614,6 +616,7 @@ def run_loso_cross_validation(
     seed: int,
     fold: int = None,
     output_dir: str = None,
+    max_iter: int = 100
 ):
     """
     Run Leave-One-Signer-Out cross-validation for fair comparison with Smart Head.
@@ -670,7 +673,7 @@ def run_loso_cross_validation(
         fold_result = evaluate_single_fold(
             fold_idx, train_embeddings, train_labels,
             test_embeddings, test_labels, test_signer,
-            method, seed,
+            method, seed, max_iter
         )
         
         all_results.append(fold_result)
@@ -810,6 +813,9 @@ Methods:
                             'Only report numbers from test in the paper. '
                             'Ignored in LOSO mode.'
                         ))
+    parser.add_argument('--max_iter', type=int, default=100, dest='max_iter',
+                        help='Maximum number of iterations for logistic regression and SVM (default: 100 for paper replicability).')
+        
     args = parser.parse_args()
 
     if args.loso:
@@ -822,6 +828,7 @@ Methods:
             seed=args.seed,
             fold=args.fold,
             output_dir=args.output_dir,
+            max_iter = args.max_iter
         )
     else:
         # Run standard signer-independent evaluation
@@ -835,6 +842,7 @@ Methods:
             eval_split=args.eval_split,
             num_shots=args.num_shots,
             output_dir=args.output_dir,
+            max_iter = args.max_iter
         )
 
 
