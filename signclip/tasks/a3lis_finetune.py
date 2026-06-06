@@ -164,8 +164,8 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        self.nce_loss = MMContraLoss() # SignClip loss
-        #self.supcon_loss = CrossModalSupConLoss() # SupCon loss
+        #self.nce_loss = MMContraLoss() # SignClip loss
+        self.supcon_loss = CrossModalSupConLoss() # SupCon loss
         #self.supcon_loss = VideoSupConLoss(temperature = 0.07) # Regularizer SupCon loss
         #self.supcon_weight = 0.2 # Regularizer SupCon loss
 
@@ -261,10 +261,10 @@ class fineTuneA3LIS(RetriTask):
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
         # BALANCED BATCH SAMPLER
-        '''
+        
         if len(self.train_dataset) > 0:
             # Create the sampler (P=4 classes, K=4 instances = batch size of 16)
-            balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=8, n_samples=2)
+            balanced_sampler = BalancedBatchSampler(self.train_dataset, n_classes=32, n_samples=4)
             
             self.train_data = DataLoader(
                 self.train_dataset,
@@ -275,9 +275,9 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
-        '''
-        # STANDARD BATCHES
         
+        # STANDARD BATCHES
+        '''
         if len(self.train_dataset) > 0:
             self.train_data = DataLoader(
                 self.train_dataset,
@@ -289,7 +289,7 @@ class fineTuneA3LIS(RetriTask):
             )
         else:
             self.train_data = None
-        
+        '''
         
 
         self.val_data = DataLoader(
@@ -368,7 +368,7 @@ class fineTuneA3LIS(RetriTask):
         return 14.28  # default: 1 / 0.07
 
     # infoNCE / MMContraLoss / Signclip original one: 
-    
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         """Batch-local bidirectional NCE loss (MMContraLoss) + 147-class sim_matrix.
 
@@ -396,9 +396,9 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()  # [N x 147]
         
         return sim_matrix, loss
-    
-    # For Supervised contrastive loss
     '''
+    # For Supervised contrastive loss
+    
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale       = self._get_logit_scale()
         
@@ -418,7 +418,7 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()
         
         return sim_matrix, loss
-    '''
+    
     # Original + SupCon as a regulizer term
     '''
     def _batch_nce_and_sim(self, output, label_tensor):
