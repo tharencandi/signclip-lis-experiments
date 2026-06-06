@@ -327,8 +327,11 @@ def evaluate_few_shot(
     
     # Normalize embeddings for cosine similarity
     print("\nNormalizing embeddings...")
-    train_embeddings_norm = train_embeddings / np.linalg.norm(train_embeddings, axis=1, keepdims=True)
-    test_embeddings_norm = test_embeddings / np.linalg.norm(test_embeddings, axis=1, keepdims=True)
+    # train_embeddings_norm = train_embeddings / np.linalg.norm(train_embeddings, axis=1, keepdims=True)
+    # test_embeddings_norm = test_embeddings / np.linalg.norm(test_embeddings, axis=1, keepdims=True)
+    
+    train_embeddings_norm = train_embeddings 
+    test_embeddings_norm = test_embeddings# 
     
     # Train and evaluate based on method
     if method == 'knn':
@@ -343,7 +346,7 @@ def evaluate_few_shot(
     elif method == 'linear_probe':
         print("\nTraining Logistic Regression (default scikit-learn settings)...")
         # Default scikit-learn LogisticRegression settings
-        clf = LogisticRegression(random_state=seed, max_iter=1000)
+        clf = LogisticRegression(verbose= True,random_state=seed, max_iter=100)
         clf.fit(train_embeddings_norm, train_labels)
     
     elif method == 'svm':
