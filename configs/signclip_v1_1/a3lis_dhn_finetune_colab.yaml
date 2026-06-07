@@ -27,7 +27,7 @@ dataset:
 fairseq:
   common:
     fp16: true
-    tensorboard_logdir: /content/signclip-lis-experiments/runs/a3lis_dhn_finetune
+    tensorboard_logdir: /content/drive/MyDrive/signclip_a3lis_dhn_finetune
     log_interval: 1000
   dataset:
     num_workers: 2
