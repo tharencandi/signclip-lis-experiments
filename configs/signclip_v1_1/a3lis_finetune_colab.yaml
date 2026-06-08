@@ -31,11 +31,11 @@ fairseq:
   common:
     fp16: true
     #tensorboard_logdir: /content/signclip-lis-experiments/runs/a3lis_finetune
-    tensorboard_logdir: /content/drive/MyDrive/signclip_a3lis_finetune/infoNCE128
+    tensorboard_logdir: /content/drive/MyDrive/signclip_a3lis_finetune/global_NCE16_augmented_100e
     log_interval: 1000
   dataset:
     num_workers: 2
-    batch_size: 128 # This gets multiplied with accumulation_steps in .py to get actual batch
+    batch_size: 16 # This gets multiplied with accumulation_steps in .py to get actual batch
   optimization:
     lr:
     - 5.0e-05
@@ -47,14 +47,14 @@ fairseq:
     warmup_updates: 122
     weight_decay: 0.01
     ddp_backend: no_c10d
-    max_epoch: 50
+    max_epoch: 100
   checkpoint:
     no_epoch_checkpoints: true
     reset_optimizer: true
     reset_dataloader: true
     reset_meters: true
     #save_dir: /content/drive/MyDrive/signclip_a3lis_finetune
-    save_dir: /content/drive/MyDrive/signclip_a3lis_finetune/infoNCE128
+    save_dir: /content/drive/MyDrive/signclip_a3lis_finetune/global_NCE16_augmented_100e
     restore_file: /content/signclip-lis-experiments/pretrained_models/baseline_temporal_checkpoint_best.pt
 task_type: sweep_small
 model:

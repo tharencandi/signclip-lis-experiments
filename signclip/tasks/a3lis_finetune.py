@@ -153,7 +153,7 @@ class fineTuneA3LIS(RetriTask):
         print(f"Trainable parameters: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
         
         # USED FOR EVERYTHING ELSE
-        
+        '''
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
         lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
         weight_decay = getattr(config.fairseq.optimization, 'weight_decay', 1e-2)
@@ -170,7 +170,7 @@ class fineTuneA3LIS(RetriTask):
         #self.supcon_weight = 0.2 # Regularizer SupCon loss
 
         max_text_len = getattr(config.dataset, 'max_len', 64)
-        
+        '''
         # USED FOR CROSS-ENTROPY
         '''
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
@@ -212,7 +212,7 @@ class fineTuneA3LIS(RetriTask):
         '''
 
         # USED FOR GLOBAL NCE
-        '''
+        
         # Remove all external loss initializations (no MMContraLoss, no CE head)
         opt_name = getattr(config.fairseq.optimization, 'optimizer', 'adamw')
         lr = config.fairseq.optimization.lr[0] if hasattr(config.fairseq.optimization, 'lr') else 1e-4
@@ -224,7 +224,7 @@ class fineTuneA3LIS(RetriTask):
         else:
             self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
         max_text_len = getattr(config.dataset, 'max_len', 64)
-        '''
+        
 
         # USED FOR GLOBAL NCE + DECOUPLED SUP-CON
         '''
@@ -368,7 +368,7 @@ class fineTuneA3LIS(RetriTask):
         return 14.28  # default: 1 / 0.07
 
     # infoNCE / MMContraLoss / Signclip original one: 
-    
+    '''
     def _batch_nce_and_sim(self, output, label_tensor):
         """Batch-local bidirectional NCE loss (MMContraLoss) + 147-class sim_matrix.
 
@@ -396,7 +396,7 @@ class fineTuneA3LIS(RetriTask):
         sim_matrix = scaled_video @ text_embeds_all.t()  # [N x 147]
         
         return sim_matrix, loss
-    
+    '''
     # For Supervised contrastive loss
     '''
     def _batch_nce_and_sim(self, output, label_tensor):
@@ -495,7 +495,7 @@ class fineTuneA3LIS(RetriTask):
         return sim_matrix, total_loss
     '''
     # Global NCE
-    '''
+    
     def _batch_nce_and_sim(self, output, label_tensor):
         logit_scale = self._get_logit_scale()
         
@@ -512,7 +512,7 @@ class fineTuneA3LIS(RetriTask):
         
         # Return the global_logits as the sim_matrix so metrics are calculated perfectly
         return global_logits, loss_nce
-    '''
+    
 
     # Global NCE + Decoupled Sup-Con
     '''
@@ -711,7 +711,7 @@ class fineTuneA3LIS(RetriTask):
     # ------------------------------------------------------------------
 
     def train_pose_collate_fn(self, batch):
-        return self.pose_collate_fn(batch, augment=False) # Change to have or not augmentation
+        return self.pose_collate_fn(batch, augment=True) # Change to have or not augmentation
 
     def val_pose_collate_fn(self, batch):
         return self.pose_collate_fn(batch, augment=False)
