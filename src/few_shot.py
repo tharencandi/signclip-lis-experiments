@@ -325,12 +325,20 @@ def build_ai_head_weights(
     precomputed_text_embeddings: Optional[dict] = None,
     text_alpha: float = 0.2,
 ):
-    """Blend visual prototypes toward text anchors in the shared raw embedding space.
+    """Blend visual prototypes toward text anchors, scoring with cosine similarity.
 
-    Both pose and text embeddings live in the same joint SignCLIP space, so Euclidean
-    distance is the right metric (no L2 normalization).
-    text_alpha=0 → pure visual prototype (identical to prototypical baseline).
-    text_alpha=1 → pure text anchor.
+    Both modalities are L2-normalised before blending so the blended center lies on
+    the unit sphere after re-normalisation.  Scoring with dot product then gives
+    cosine similarity, matching zero_shot.py.
+
+    Alpha is adaptive per class:
+        effective_alpha_k = text_alpha * clip(cosine_sim(proto_k, text_k), 0, 1)
+    Classes where the visual prototype already agrees with the text anchor keep the
+    full text_alpha; classes where they diverge are pulled back toward their visual
+    prototype automatically.
+
+    text_alpha=0 → pure visual prototypes for all classes.
+    text_alpha=1 → each class blends proportionally to its visual-text agreement.
     Returns (class_labels, class_centers, text_proto_dists, skipped_classes).
     """
     class_indices = defaultdict(list)
@@ -341,8 +349,8 @@ def build_ai_head_weights(
         valid_classes = sorted(class_indices.keys())
         skipped_classes = []
     else:
-        valid_classes = sorted([label for label, idxs in class_indices.items() if len(idxs) >= number_shot])
-        skipped_classes = sorted([label for label, idxs in class_indices.items() if len(idxs) < number_shot])
+        valid_classes = sorted(class_indices.keys())
+        skipped_classes = []
 
     if not valid_classes:
         raise ValueError("No classes have enough support samples to construct AI-Head weights.")
@@ -355,7 +363,7 @@ def build_ai_head_weights(
         if use_all_support:
             support_indices = idxs
         else:
-            support_indices = rng.choice(idxs, size=number_shot, replace=False)
+            support_indices = rng.choice(idxs, size=min(number_shot, len(idxs)), replace=False)
         prototype = np.mean(train_embeddings[support_indices], axis=0)
         prototype_labels.append(label)
         prototype_vectors.append(prototype)
@@ -383,12 +391,27 @@ def build_ai_head_weights(
             )
         text_embeddings = np.vstack(text_chunks)
 
-    # Raw embedding space (no normalization) — Euclidean is the right metric here.
-    # Blend class center from visual prototype toward text anchor by text_alpha.
-    class_centers = (1.0 - text_alpha) * prototype_matrix + text_alpha * text_embeddings
+    # L2-normalise both modalities so the blend lives on the unit sphere.
+    def _l2_norm(x):
+        norms = np.linalg.norm(x, axis=1, keepdims=True)
+        return x / np.where(norms == 0, 1.0, norms)
 
-    # Diagnostic: per-class distance between text anchor and visual prototype in the joint space.
-    text_proto_dists = np.linalg.norm(text_embeddings - prototype_matrix, axis=1)  # (C,)
+    prototype_matrix_norm = _l2_norm(prototype_matrix)
+    text_embeddings_norm  = _l2_norm(text_embeddings)
+
+    # Per-class cosine similarity between visual prototype and text anchor.
+    cosine_sims = np.sum(text_embeddings_norm * prototype_matrix_norm, axis=1)  # (C,)
+    text_proto_dists = 1.0 - cosine_sims  # cosine distance for diagnostics
+
+    # Adaptive per-class alpha: text_alpha is an upper bound.
+    # Effective alpha scales by cosine agreement — divergent classes trust text less.
+    per_class_alphas = (text_alpha * np.clip(cosine_sims, 0.0, 1.0))[:, np.newaxis]  # (C, 1)
+    print(f"  Adaptive alpha (mean={float(np.mean(per_class_alphas)):.3f}, "
+          f"min={float(np.min(per_class_alphas)):.3f}, max={float(np.max(per_class_alphas)):.3f})")
+
+    # Blend in normalised space, then re-normalise so centers stay on the unit sphere.
+    blended = (1.0 - per_class_alphas) * prototype_matrix_norm + per_class_alphas * text_embeddings_norm
+    class_centers = _l2_norm(blended)
 
     return np.array(prototype_labels, dtype=object), class_centers, text_proto_dists, skipped_classes
 
@@ -582,8 +605,10 @@ def evaluate_few_shot(
         clf.fit(train_embeddings, train_labels_encoded)
 
     elif method == 'prototypical':
-        if number_shot < 1 or number_shot > 7:
-            raise ValueError("number_shot must be in [1, 7] for A3LIS signer split.")
+        max_support = max(train_class_counts.values())
+        if number_shot > max_support:
+            print(f"  number_shot={number_shot} exceeds max examples per class ({max_support}); capping to {max_support}.")
+            number_shot = max_support
 
         print(
             f"\nTraining Prototypical classifier (class-average supports, number_shot={number_shot}, "
@@ -594,24 +619,18 @@ def evaluate_few_shot(
         for i, label in enumerate(train_labels):
             class_indices[label].append(i)
 
-        valid_classes = sorted([label for label, idxs in class_indices.items() if len(idxs) >= number_shot])
-        skipped_classes = sorted([label for label, idxs in class_indices.items() if len(idxs) < number_shot])
+        valid_classes = sorted(class_indices.keys())
 
         if not valid_classes:
             raise ValueError(
                 f"No classes have enough support samples for number_shot={number_shot}."
-            )
-        if skipped_classes:
-            print(
-                f"Warning: {len(skipped_classes)} classes have < {number_shot} support samples and "
-                "will be excluded from prototype construction."
             )
 
         rng = np.random.default_rng(seed)
         prototype_labels = []
         prototype_vectors = []
         for label in valid_classes:
-            sampled_indices = rng.choice(class_indices[label], size=number_shot, replace=False)
+            sampled_indices = rng.choice(class_indices[label], size=min(number_shot, len(class_indices[label])), replace=False)
             prototype = np.mean(train_embeddings[sampled_indices], axis=0)
             prototype_labels.append(label)
             prototype_vectors.append(prototype)
@@ -628,8 +647,10 @@ def evaluate_few_shot(
         print(f"  Built prototypes: {len(class_labels)} classes")
 
     elif method == 'ai_head':
-        if number_shot < 1 or number_shot > 7:
-            raise ValueError("number_shot must be in [1, 7] for A3LIS signer split.")
+        max_support = max(train_class_counts.values())
+        if number_shot > max_support:
+            print(f"  number_shot={number_shot} exceeds max examples per class ({max_support}); capping to {max_support}.")
+            number_shot = max_support
 
         print(
             f"\nTraining AI-Head (number_shot={number_shot}, model={model_name}, "
@@ -665,18 +686,16 @@ def evaluate_few_shot(
                 f"Warning: {len(skipped_classes)} classes have < {number_shot} support samples and "
                 "will be excluded from AI-Head construction."
             )
-        # Euclidean distance to blended class centers in the raw joint embedding space.
-        # Same distance metric and normalization regime as the prototypical baseline.
-        print(f"scoring with AI-Head: Euclidean to blended class centers (text_alpha={text_alpha:.2f})...")
-        distances = np.linalg.norm(
-            test_embeddings[:, np.newaxis, :] - class_centers[np.newaxis, :, :], axis=2
-        )  # (N, C)
-        probabilities = -distances  # negate: higher score = closer center
+        # Cosine similarity to blended, L2-normalised class centers.
+        print(f"scoring with AI-Head: cosine similarity to blended class centers (text_alpha={text_alpha:.2f})...")
+        test_norms = np.linalg.norm(test_embeddings, axis=1, keepdims=True)
+        test_embeddings_norm = test_embeddings / np.where(test_norms == 0, 1.0, test_norms)
+        probabilities = np.matmul(test_embeddings_norm, class_centers.T)  # (N, C), higher = better
         sorted_indices = np.argsort(-probabilities, axis=1)
         predictions = np.array([class_labels[row[0]] for row in sorted_indices], dtype=object)
 
         print(f"  Built AI-Head: {len(class_labels)} classes, text_alpha={text_alpha:.2f}")
-        print(f"  Text-proto dist (mean={float(np.mean(text_proto_dists)):.4f}, "
+        print(f"  Text-proto cosine-dist (mean={float(np.mean(text_proto_dists)):.4f}, "
               f"min={float(np.min(text_proto_dists)):.4f}, max={float(np.max(text_proto_dists)):.4f})")
 
     else:
@@ -802,7 +821,7 @@ def evaluate_few_shot(
         print(f"text_alpha (text blend weight): {text_alpha:.2f}")
         if model_checkpoint_path:
             print(f"Checkpoint: {model_checkpoint_path}")
-        print("Scoring: Euclidean to blended class center in raw joint embedding space")
+        print("Scoring: cosine similarity to L2-normalised blended class center")
     print(f"Seed: {seed}")
     print(f"\nRetrieval Metrics:")
     print(f"  R@1↑:             {accuracy:>7.2%}  ({hit_1:>5}/{num_test})")
@@ -979,10 +998,9 @@ def evaluate_single_fold(
             precomputed_text_embeddings=precomputed_text_embeddings,
             text_alpha=text_alpha,
         )
-        distances = np.linalg.norm(
-            test_embeddings[:, np.newaxis, :] - class_centers[np.newaxis, :, :], axis=2
-        )
-        probabilities = -distances
+        test_norms = np.linalg.norm(test_embeddings, axis=1, keepdims=True)
+        test_embeddings_norm = test_embeddings / np.where(test_norms == 0, 1.0, test_norms)
+        probabilities = np.matmul(test_embeddings_norm, class_centers.T)
         sorted_indices = np.argsort(-probabilities, axis=1)
         predictions = np.array([class_labels[row[0]] for row in sorted_indices], dtype=object)
     else:
