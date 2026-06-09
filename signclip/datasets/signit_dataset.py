@@ -2,7 +2,6 @@ import os
 import re
 from glob import glob
 
-import pandas as pd
 import torch
 from pose_format import Pose
 from transformers import AutoTokenizer
@@ -38,37 +37,28 @@ def parse_signit_filename(filename):
 
 
 class SignITMetaProcessor:
-    def __init__(self, poses_root, csv_path, split_filter=None):
+    def __init__(self, poses_root, split_filter=None):
         self.samples = []
         self.split = split_filter
 
-        df = pd.read_csv(csv_path)
-        self.label_map = {row['label_italian']: idx for idx, row in df.iterrows()}
-        self.english_map = {
-            row['label_italian']: [
-                label.strip().lower()
-                for label in str(row['label_english']).replace(';', ',').split(',')
-                if label.strip()
-            ]
-            for _, row in df.iterrows()
-        }
-        self.category_map = {
-            row['label_italian']: str(row['category']).strip().lower()
-            for _, row in df.iterrows()
-            if 'category' in row and pd.notna(row['category'])
-        }
-
         pose_files = sorted(glob(os.path.join(poses_root, '*.pose')))
+        parsed_rows = []
         for pose_path in pose_files:
             parsed = parse_signit_filename(os.path.basename(pose_path))
             if parsed is None:
                 continue
+            parsed_rows.append((pose_path, parsed))
 
+        labels = sorted({parsed['it_label'] for _, parsed in parsed_rows})
+        self.label_map = {label: idx for idx, label in enumerate(labels)}
+        self.english_map = {parsed['it_label']: [parsed['eng_label']] for _, parsed in parsed_rows}
+
+        for pose_path, parsed in parsed_rows:
             if split_filter and parsed['split'] != split_filter:
                 continue
 
             it_label = parsed['it_label']
-            english_labels = self.english_map.get(it_label, [parsed['eng_label']])
+            english_labels = [parsed['eng_label']]
             english_label = english_labels[0]
 
             self.samples.append({
@@ -79,7 +69,7 @@ class SignITMetaProcessor:
                 'pose_path': pose_path,
                 'split': parsed['split'],
                 'labels_english': english_labels,
-                'category': self.category_map.get(it_label, parsed['eng_macro']),
+                'category': parsed['eng_macro'],
                 'it_macro': parsed['it_macro'],
                 'eng_macro': parsed['eng_macro'],
                 'frame_start': parsed['frame_start'],
@@ -153,12 +143,11 @@ class SignITDataset(MMDataset):
     def __init__(
         self,
         poses_root,
-        csv_path,
         split_filter=None,
         tokenizer_name='bert-base-cased',
         max_text_len=64,
     ):
-        meta_processor = SignITMetaProcessor(poses_root, csv_path, split_filter)
+        meta_processor = SignITMetaProcessor(poses_root, split_filter)
         video_processor = SignITVideoProcessor()
         text_processor = SignITTextProcessor(meta_processor.label_map)
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)

@@ -10,7 +10,7 @@ from signclip.tasks.retritask import RetriTask
 from signclip.datasets.signit_dataset import SignITDataset
 from signclip.utils.pose_utils import preprocess_pose, MAX_FRAMES
 from signclip.utils.metrics import compute_retrieval_metrics
-from signclip.utils.signit_paths import POSES_ROOT, CSV_PATH
+from signclip.utils.signit_paths import POSES_ROOT
 
 
 class fineTuneSignIT(RetriTask):
@@ -75,13 +75,11 @@ class fineTuneSignIT(RetriTask):
         max_text_len = getattr(config.dataset, 'max_len', 64)
         self.train_dataset = SignITDataset(
             POSES_ROOT,
-            CSV_PATH,
             split_filter='train',
             max_text_len=max_text_len,
         )
         self.val_dataset = SignITDataset(
             POSES_ROOT,
-            CSV_PATH,
             split_filter='val',
             max_text_len=max_text_len,
         )
