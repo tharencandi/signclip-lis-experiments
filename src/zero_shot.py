@@ -67,14 +67,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.demo_sign import embed_text
-
-
-# Predefined text prompt templates for prompt engineering experiments
-PROMPT_TEMPLATES = {
-    'raw': '{}',                          # Raw gloss (no template)
-    'it_lis': '<it> <lis> {}',            # Italian language tag
-    'en_lis': '<en> <lis> {}',            # English language tag (paper standard)
-}
+from src.embedding_utils import PROMPT_TEMPLATES
 
 
 def compute_cmc_curve(ranks, num_classes):

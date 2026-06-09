@@ -48,9 +48,9 @@ if str(project_root) not in sys.path:
 from demo_sign import embed_pose
 
 
-def load_and_normalise_pose(pose_path: Path, normalize: bool = True,
+def load_and_normalise_pose(pose_path: Path, normalize: bool = False,
                             remove_redundant: bool = True, 
-                            anonymize: bool = True) -> Optional[np.ndarray]:
+                            anonymize: bool = False) -> Optional[np.ndarray]:
     """
     Load a .pose file and optionally apply SignCLIP normalization.
     
@@ -132,10 +132,11 @@ def precompute_normalised_embeddings(
     pose_dir: str,
     output_dir: str,
     model_name: str = 'default',
-    normalize: bool = True,
+    normalize: bool = False,
     remove_redundant: bool = True,
-    anonymize: bool = True,
-    dataset_root: Optional[str] = None
+    anonymize: bool = False,
+    dataset_root: Optional[str] = None,
+    signit_root: Optional[str] = None,
 ):
     """
     Compute pose embeddings with optional normalization.
@@ -147,36 +148,25 @@ def precompute_normalised_embeddings(
         normalize: Apply normalization (if False, use raw poses)
         remove_redundant: Remove redundant keypoints (E6) - only if normalize=True
         anonymize: Apply first-frame anonymization (E6.2) - only if normalize=True
-        dataset_root: Root directory for A3LIS dataset (uses data_loader.py)
+        dataset_root: Root directory for A3LIS dataset
+        signit_root: Root directory for SignIT dataset (uses signit package)
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
     # Determine which mode to use
-    use_dataloader = dataset_root is not None
-    
-    if use_dataloader:
-        # A3LIS dataset mode - use a3lis package
+    if dataset_root is not None:
+        # A3LIS dataset mode
         print("Using A3LIS dataset package")
-        
-        # Import the a3lis package
         try:
-            # Add dataset directory to path if needed
             dataset_parent = Path(dataset_root).parent
             if str(dataset_parent) not in sys.path:
                 sys.path.insert(0, str(dataset_parent))
-            
-            # Import from the package
             from A3LIS_dataset_poses.a3lis import get_dataset, get_split_info
-            
-            # Load all data (train + test)
-            dataset = get_dataset(use_categories=True)
-            
-            if not dataset:
+            pose_items = get_dataset(use_categories=True)
+            if not pose_items:
                 print(f"No data loaded from A3LIS dataset")
                 return
-            
-            # Show split information
             split_info = get_split_info()
             if split_info:
                 print(f"  Split strategy: {split_info['strategy']}")
@@ -186,15 +176,32 @@ def precompute_normalised_embeddings(
                     print(f"  Val:   {split_info.get('val_count', '?')} samples from {len(split_info['val_signers'])} signers")
                 print(f"  Total: {split_info.get('total_count', '?')} samples")
             else:
-                print(f"  Found {len(dataset)} pose files (no split info)")
-            
-            pose_items = dataset
-            
+                print(f"  Found {len(pose_items)} pose files (no split info)")
         except ImportError as e:
             print(f"ERROR: Could not import A3LIS dataset package: {e}")
             print(f"Make sure the dataset is at {dataset_root}")
             return
-        
+
+    elif signit_root is not None:
+        # SignIT dataset mode
+        print("Using SignIT dataset package")
+        try:
+            signit_path = Path(signit_root)
+            if str(signit_path) not in sys.path:
+                sys.path.insert(0, str(signit_path))
+            from signit import get_dataset
+            pose_items = get_dataset(use_categories=True)
+            if not pose_items:
+                print(f"No data loaded from SignIT dataset")
+                return
+            from collections import Counter as _Counter
+            split_counts = _Counter(item['split'] for item in pose_items)
+            print(f"  Found {len(pose_items)} pose files: {dict(split_counts)}")
+        except ImportError as e:
+            print(f"ERROR: Could not import SignIT package: {e}")
+            print(f"Make sure {signit_root}/signit/__init__.py exists")
+            return
+
     else:
         # Legacy mode - scan pose directory
         print("Using legacy mode - scanning pose directory")
@@ -333,12 +340,17 @@ def main():
     source_group.add_argument(
         '--dataset_root',
         type=str,
-        help='Root directory for A3LIS dataset (uses data_loader.py)'
+        help='Root directory for A3LIS dataset'
+    )
+    source_group.add_argument(
+        '--signit_root',
+        type=str,
+        help='Root directory for SignIT dataset (must contain signit/ package)'
     )
     source_group.add_argument(
         '--pose_dir',
         type=str,
-        help='Directory containing original .pose files (legacy mode)'
+        help='Directory containing .pose files (legacy mode, labels from filenames)'
     )
     
     parser.add_argument(
@@ -395,7 +407,8 @@ def main():
         normalize=normalize,
         remove_redundant=not args.no_remove_redundant,
         anonymize=not args.no_anonymize,
-        dataset_root=args.dataset_root
+        dataset_root=args.dataset_root,
+        signit_root=args.signit_root,
     )
 
 
