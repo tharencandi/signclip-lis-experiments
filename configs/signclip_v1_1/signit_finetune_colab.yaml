@@ -72,6 +72,18 @@ dataset:
       weight_decay: 0.08
       max_epoch: 20
       note: stronger optimizer regularization on top of v4
+    v5:
+      aug_sigma_temporal: 0.3
+      aug_sigma_spatial: 0.3
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.4
+      aug_strength_max: 5.0
+      lr: 5.0e-05
+      warmup_updates: 122
+      weight_decay: 0.02
+      max_epoch: 50
+      no_epoch_checkpoints: false
+      note: transfer-recovery regime (lighter regularization, epoch-wise checkpoint sweep)
 fairseq:
   common:
     fp16: true
@@ -82,18 +94,18 @@ fairseq:
     batch_size: 16
   optimization:
     lr:
-    - 3.0e-05
+    - 5.0e-05
     clip_norm: 2.0
     optimizer: adam
     adam_betas: (0.9, 0.98)
     lr_scheduler: polynomial_decay
     total_num_update: 1000000
-    warmup_updates: 300
-    weight_decay: 0.08
+    warmup_updates: 122
+    weight_decay: 0.02
     ddp_backend: no_c10d
     max_epoch: 50
   checkpoint:
-    no_epoch_checkpoints: true
+    no_epoch_checkpoints: false
     reset_optimizer: true
     reset_dataloader: true
     reset_meters: true

@@ -36,9 +36,7 @@ def main():
 
     if args.jobtype == "local_single":
         num_epochs = config.fairseq.optimization.get("max_epoch", 10)
-        best_ckpt_path = os.path.join(save_dir, "best_checkpoint.pt")
         writer = SummaryWriter(log_dir=save_dir)
-        best_score = -1.0
         num_classes = len(finetuner.train_dataset.meta_processor.label_map)
 
         def retrieval_score(r1, r5, r10, medK):
@@ -48,6 +46,32 @@ def main():
                 + 0.125 * r10 / 100.
                 + 0.125 * (1. - medK / num_classes)
             )
+
+        def equal_r1_r5_r10_score(r1, r5, r10):
+            return (r1 + r5 + r10) / 300.0
+
+        criteria = {
+            "loss": {
+                "mode": "min",
+                "best": float("inf"),
+                "path": os.path.join(save_dir, "best_by_loss_checkpoint.pt"),
+            },
+            "r1": {
+                "mode": "max",
+                "best": float("-inf"),
+                "path": os.path.join(save_dir, "best_by_r1_checkpoint.pt"),
+            },
+            "r1_r5_r10_equal": {
+                "mode": "max",
+                "best": float("-inf"),
+                "path": os.path.join(save_dir, "best_by_r1_r5_r10_equal_checkpoint.pt"),
+            },
+            "regime_score": {
+                "mode": "max",
+                "best": float("-inf"),
+                "path": os.path.join(save_dir, "best_checkpoint.pt"),
+            },
+        }
 
         for epoch in range(num_epochs):
             train_loss, train_r1, train_r5, train_r10, train_medK = finetuner.train_step_with_metrics()
@@ -64,7 +88,9 @@ def main():
             writer.add_scalar("MedianK/train", train_medK, epoch)
             writer.add_scalar("MedianK/val", val_medK, epoch)
             val_score = retrieval_score(val_r1, val_r5, val_r10, val_medK)
+            val_equal_score = equal_r1_r5_r10_score(val_r1, val_r5, val_r10)
             writer.add_scalar("Score/val", val_score, epoch)
+            writer.add_scalar("Score/val_r1_r5_r10_equal", val_equal_score, epoch)
             writer.flush()
 
             print(
@@ -78,8 +104,24 @@ def main():
                 f"R@10: {val_r10:.2f}% medK: {val_medK:.1f}"
             )
 
-            if val_score > best_score:
-                best_score = val_score
+            values = {
+                "loss": val_loss,
+                "r1": val_r1,
+                "r1_r5_r10_equal": val_equal_score,
+                "regime_score": val_score,
+            }
+
+            for name, spec in criteria.items():
+                current_value = values[name]
+                improved = (
+                    current_value < spec["best"]
+                    if spec["mode"] == "min"
+                    else current_value > spec["best"]
+                )
+                if not improved:
+                    continue
+
+                spec["best"] = current_value
                 torch.save(
                     {
                         "epoch": epoch + 1,
@@ -91,13 +133,18 @@ def main():
                         "val_medK": val_medK,
                         "val_loss": val_loss,
                         "score": val_score,
+                        "equal_score": val_equal_score,
+                        "selection_metric": name,
+                        "selection_value": current_value,
                     },
-                    best_ckpt_path,
+                    spec["path"],
                 )
-                print(f"  Saved best checkpoint (score: {val_score:.4f})")
+                print(f"  Saved best-{name} checkpoint ({current_value:.4f})")
 
         writer.close()
-        print(f"\nTraining complete. Best score: {best_score:.4f} - checkpoint at {best_ckpt_path}")
+        print("\nTraining complete. Best checkpoints:")
+        for name, spec in criteria.items():
+            print(f"  - {name}: {spec['best']:.4f} @ {spec['path']}")
 
     elif args.jobtype == "local_predict":
         val_loss, val_r1, val_r5, val_r10, val_medK = finetuner.eval_with_metrics()
