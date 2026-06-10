@@ -56,8 +56,22 @@ dataset:
       aug_p_flip: 0.4
       aug_strength_max: 5.0
       weight_decay: 0.05
-      max_epoch: 20
+      max_epoch: 25
       note: v2 aug with stronger regularization and shorter training
+      observed_best_epoch: 16
+      observed_best_val_score: 0.3941
+      observed_pattern: validation peaked mid-run, then overfit
+    v4_1:
+      aug_sigma_temporal: 0.3
+      aug_sigma_spatial: 0.3
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.4
+      aug_strength_max: 5.0
+      lr: 3.0e-05
+      warmup_updates: 300
+      weight_decay: 0.08
+      max_epoch: 20
+      note: stronger optimizer regularization on top of v4
 fairseq:
   common:
     fp16: true
@@ -68,16 +82,16 @@ fairseq:
     batch_size: 16
   optimization:
     lr:
-    - 5.0e-05
+    - 3.0e-05
     clip_norm: 2.0
     optimizer: adam
     adam_betas: (0.9, 0.98)
     lr_scheduler: polynomial_decay
     total_num_update: 1000000
-    warmup_updates: 122
-    weight_decay: 0.05
+    warmup_updates: 300
+    weight_decay: 0.08
     ddp_backend: no_c10d
-    max_epoch: 25
+    max_epoch: 20
   checkpoint:
     no_epoch_checkpoints: true
     reset_optimizer: true
