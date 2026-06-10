@@ -91,7 +91,7 @@ fairseq:
     warmup_updates: 300
     weight_decay: 0.08
     ddp_backend: no_c10d
-    max_epoch: 20
+    max_epoch: 50
   checkpoint:
     no_epoch_checkpoints: true
     reset_optimizer: true
