@@ -12,6 +12,7 @@ so that fine-tuning and inference see the same input distribution.
 
 import numpy as np
 import random
+import logging
 import torch
 import torch.nn.functional as F
 from pose_format import Pose
@@ -33,6 +34,8 @@ FACEMESH_CONTOURS_POINTS = [
 
 # Maximum sequence length accepted by the model (frames).
 MAX_FRAMES = 256
+
+logger = logging.getLogger(__name__)
 
 
 def pose_normalization_info(pose_header):
@@ -117,9 +120,10 @@ def preprocess_pose(
         pose_frames = apply_augmentations(pose_frames, **augment_kwargs)
 
     if max_frames is not None and pose_frames.size(1) > max_frames:
-        print(
-            f"pose sequence length too long ({pose_frames.size(1)}) "
-            f"longer than {max_frames} frames. Truncating"
+        logger.debug(
+            "pose sequence length too long (%s) longer than %s frames. Truncating",
+            pose_frames.size(1),
+            max_frames,
         )
         pose_frames = pose_frames[:, :max_frames, :]
 
