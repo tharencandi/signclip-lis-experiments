@@ -25,6 +25,12 @@ from signclip.utils.signit_paths import POSES_ROOT
 
 class fineTuneSignIT(RetriTask):
 
+    @staticmethod
+    def _cfg_float(cfg_obj, key, default):
+        """Read float config value with safe fallback when key is missing or None."""
+        value = getattr(cfg_obj, key, default)
+        return float(default) if value is None else float(value)
+
     def __init__(self, config, checkpoint_path=None):
         super().__init__(config)
 
@@ -126,11 +132,11 @@ class fineTuneSignIT(RetriTask):
         batch_size = getattr(config.fairseq.dataset, 'batch_size', 16)
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
 
-        self.aug_sigma_temporal = getattr(config.dataset, 'aug_sigma_temporal', 0.2)
-        self.aug_sigma_spatial = getattr(config.dataset, 'aug_sigma_spatial', 0.2)
-        self.aug_sigma_noise = getattr(config.dataset, 'aug_sigma_noise', 0.001)
-        self.aug_p_flip = getattr(config.dataset, 'aug_p_flip', 0.2)
-        self.aug_strength_max = getattr(config.dataset, 'aug_strength_max', 3.0)
+        self.aug_sigma_temporal = self._cfg_float(config.dataset, 'aug_sigma_temporal', 0.2)
+        self.aug_sigma_spatial = self._cfg_float(config.dataset, 'aug_sigma_spatial', 0.2)
+        self.aug_sigma_noise = self._cfg_float(config.dataset, 'aug_sigma_noise', 0.001)
+        self.aug_p_flip = self._cfg_float(config.dataset, 'aug_p_flip', 0.2)
+        self.aug_strength_max = self._cfg_float(config.dataset, 'aug_strength_max', 3.0)
 
         self.train_data = DataLoader(
             self.train_dataset,
