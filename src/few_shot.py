@@ -458,7 +458,7 @@ def evaluate_few_shot(
                    for 1-shot / 5-shot evaluation). Default: use all available examples.
         number_shot: Support examples per class for prototypical method (default: 7, max: 7).
         output_dir: Directory to save results CSV. If None, results are not saved.
-        class_eval: Print per-class retrieval metrics and save per-class metrics to CSV.
+        class_eval: Print per-class retrieval metrics and save per-class metrics to CSV."""
     np.random.seed(seed)
     
     print(f"\n{'='*60}")
@@ -562,8 +562,7 @@ def evaluate_few_shot(
         # K = num_classes when using the full training set (paper standard).
         k = num_shots if num_shots is not None else len(common_classes)
         k = min(k, len(train_labels))  # guard against edge cases
-        #k = 1 #overide
-        k = 7
+      
         #use default metric - euclidean distance for KNN
         clf = Pipeline(
             steps = [("scaler", StandardScaler()), ("knn", KNeighborsClassifier(n_neighbors=k))]
