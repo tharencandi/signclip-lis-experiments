@@ -56,7 +56,7 @@ dataset:
       aug_p_flip: 0.4
       aug_strength_max: 5.0
       weight_decay: 0.05
-      max_epoch: 25
+      max_epoch: 50
       note: v2 aug with stronger regularization and shorter training
       observed_best_epoch: 16
       observed_best_val_score: 0.3941
