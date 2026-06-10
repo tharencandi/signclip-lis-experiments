@@ -32,7 +32,7 @@ _FILENAME_RE = re.compile(
     r'^(.+)'
     r'_(animali|cibo|colori|emozioni|famiglia)'
     r'_(animals|food|colors|emotions|family)'
-    r'_([a-z]+)'
+    r"_([a-z][a-z0-9\-']*)"
     r'_(.+)'
     r'_(\d+)_(\d+)'
     r'_(train|test|val)$'
