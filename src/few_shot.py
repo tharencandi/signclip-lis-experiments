@@ -457,9 +457,8 @@ def evaluate_few_shot(
         num_shots: If set, limit training examples to this many per class (e.g. 1 or 5
                    for 1-shot / 5-shot evaluation). Default: use all available examples.
         number_shot: Support examples per class for prototypical method (default: 7, max: 7).
-        output_dir: Directory to save results JSON. If None, results are not saved.
-        class_eval: Print per-class retrieval metrics and save per-class metrics to JSON.
-    """
+        output_dir: Directory to save results CSV. If None, results are not saved.
+        class_eval: Print per-class retrieval metrics and save per-class metrics to CSV.
     np.random.seed(seed)
     
     print(f"\n{'='*60}")
