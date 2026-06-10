@@ -19,31 +19,36 @@ dataset:
   aligner: DSAligner
   pose_components: 'reduced_face'
   augment_temporal: true
-  # Current active augmentation regime (more aggressive than initial run).
-  aug_sigma_temporal: 0.3
-  aug_sigma_spatial: 0.3
-  aug_sigma_noise: 0.002
-  aug_p_flip: 0.4
-  aug_strength_max: 5.0
+  # Current active augmentation regime (v3 - maximally aggressive).
+  aug_sigma_temporal: 0.5
+  aug_sigma_spatial: 0.5
+  aug_sigma_noise: 0.005
+  aug_p_flip: 0.5
+  aug_strength_max: 8.0
 
   # Saved experiment history for reproducibility.
   aug_regime_notes:
-    previous:
-      name: balanced_aug_v1
+    v1:
       aug_sigma_temporal: 0.2
       aug_sigma_spatial: 0.2
       aug_sigma_noise: 0.001
       aug_p_flip: 0.2
       aug_strength_max: 3.0
       note: improved over baseline but still overfit
-    current:
-      name: balanced_aug_v2_more_aggressive
+    v2:
       aug_sigma_temporal: 0.3
       aug_sigma_spatial: 0.3
       aug_sigma_noise: 0.002
       aug_p_flip: 0.4
       aug_strength_max: 5.0
-      note: stronger regularization for low-shot classes
+      note: still overfitting
+    v3:
+      aug_sigma_temporal: 0.5
+      aug_sigma_spatial: 0.5
+      aug_sigma_noise: 0.005
+      aug_p_flip: 0.5
+      aug_strength_max: 8.0
+      note: maximally aggressive - third attempt
 fairseq:
   common:
     fp16: true
