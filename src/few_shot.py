@@ -39,7 +39,7 @@ import json
 import csv
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional
 import numpy as np
 import statistics
 from collections import defaultdict
@@ -48,114 +48,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
-from src.demo_sign import embed_text
-from src.embedding_utils import EN_LIS_PROMPT_TEMPLATE
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 # Add project root to path for signclip imports
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
-
-
-AI_HEAD_PROMPT_TEMPLATE = EN_LIS_PROMPT_TEMPLATE
-AI_HEAD_TEXT_BATCH_SIZE = 16
-
-
-def load_precomputed_text_embeddings_from_dir(text_embeddings_dir: str, model_name: str) -> Dict[str, np.ndarray]:
-    """Load precomputed text embeddings from a directory and return label->embedding map."""
-    dir_path = Path(text_embeddings_dir)
-    if not dir_path.exists() or not dir_path.is_dir():
-        raise FileNotFoundError(f"Text embeddings directory not found: {text_embeddings_dir}")
-
-    embedding_files = sorted(dir_path.glob('text_embeddings*.npy'))
-    if not embedding_files:
-        raise FileNotFoundError(
-            f"No text embedding files found in {text_embeddings_dir}. Expected files like text_embeddings*.npy"
-        )
-
-    preferred = [p for p in embedding_files if model_name in p.name]
-    embedding_file = preferred[0] if preferred else embedding_files[0]
-
-    metadata_candidate = embedding_file.with_name(embedding_file.name.replace('text_embeddings', 'text_metadata')).with_suffix('.json')
-    labels_candidate = embedding_file.with_name(embedding_file.name.replace('text_embeddings', 'text_labels')).with_suffix('.txt')
-
-    text_embeddings = np.load(embedding_file)
-    if text_embeddings.ndim == 1:
-        text_embeddings = text_embeddings.reshape(1, -1)
-
-    labels = None
-    if metadata_candidate.exists():
-        with open(metadata_candidate, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
-        labels = metadata.get('labels')
-
-    if labels is None and labels_candidate.exists():
-        with open(labels_candidate, 'r', encoding='utf-8') as f:
-            labels = [line.strip() for line in f if line.strip()]
-
-    if labels is None:
-        all_label_files = sorted(dir_path.glob('text_labels*.txt'))
-        if all_label_files:
-            with open(all_label_files[0], 'r', encoding='utf-8') as f:
-                labels = [line.strip() for line in f if line.strip()]
-
-    if labels is None:
-        raise FileNotFoundError(
-            f"Could not find labels for {embedding_file.name}. Expected text_metadata*.json with 'labels' "
-            "or text_labels*.txt in the same directory."
-        )
-
-    if len(labels) != text_embeddings.shape[0]:
-        raise ValueError(
-            f"Mismatch in precomputed text artifacts: {len(labels)} labels but "
-            f"{text_embeddings.shape[0]} embeddings in {embedding_file.name}"
-        )
-
-    label_to_embedding = {str(label): text_embeddings[i] for i, label in enumerate(labels)}
-    print(f"Loaded precomputed text embeddings: {len(label_to_embedding)} labels from {embedding_file}")
-    return label_to_embedding
-
-
-def resolve_ai_head_precomputed_map(
-    target_labels: list,
-    class_prompt_labels: dict,
-    loaded_label_to_embedding: Dict[str, np.ndarray],
-) -> Dict[str, np.ndarray]:
-    """Resolve current dataset class labels to precomputed text anchor embeddings."""
-    resolved = {}
-    missing = []
-
-    for label in sorted(set(target_labels)):
-        prompt_label = str(class_prompt_labels.get(label, str(label)))
-        candidates = [
-            prompt_label,
-            prompt_label.strip(),
-            AI_HEAD_PROMPT_TEMPLATE.format(prompt_label),
-            str(label),
-            str(label).strip(),
-            AI_HEAD_PROMPT_TEMPLATE.format(str(label)),
-        ]
-
-        matched = None
-        for key in candidates:
-            if key in loaded_label_to_embedding:
-                matched = loaded_label_to_embedding[key]
-                break
-
-        if matched is None:
-            missing.append((label, prompt_label))
-        else:
-            resolved[label] = matched
-
-    if missing:
-        preview = ', '.join([f"{cls}->{prompt}" for cls, prompt in missing[:5]])
-        raise ValueError(
-            "Missing precomputed text embeddings for some classes. "
-            f"Examples: {preview}. Ensure precomputed labels align with AI-Head prompts."
-        )
-
-    return resolved
 
 
 def load_a3lis_embeddings(embedding_dir: Path, split: str, label_language: str = 'english', use_categories: bool = False):
@@ -279,149 +177,9 @@ def load_all_embeddings_with_signers(embedding_dir: Path, label_language: str = 
     return embeddings_array, labels, signers, filenames
 
 
-def l2_normalize_rows(array: np.ndarray) -> np.ndarray:
-    """L2-normalize a 2D array row-wise with zero-norm protection."""
-    norms = np.linalg.norm(array, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1.0, norms)
-    return array / norms
-
-
-def load_class_prompt_labels(embedding_dir: Path, label_language: str = 'english', use_categories: bool = False):
-    """Map current class labels to English prompt anchors for AI-Head."""
-    metadata_path = embedding_dir / 'embeddings_metadata.json'
-    if not metadata_path.exists():
-        raise FileNotFoundError(f"Metadata not found: {metadata_path}")
-
-    with open(metadata_path, 'r', encoding='utf-8') as f:
-        metadata = json.load(f)
-
-    prompt_map = {}
-    for item in metadata['embeddings']:
-        if use_categories:
-            current_label = item.get('category', item['label_italian'])
-            prompt_label = item.get('category', item['labels_english'][0] if item['labels_english'] else item['label_italian'])
-        elif label_language == 'italian':
-            current_label = item['label_italian']
-            prompt_label = item['labels_english'][0] if item['labels_english'] else item['label_italian']
-        else:
-            current_label = item['labels_english'][0] if item['labels_english'] else item['label_italian']
-            prompt_label = current_label
-
-        if current_label not in prompt_map:
-            prompt_map[current_label] = prompt_label
-
-    return prompt_map
-
-
-def build_ai_head_weights(
-    train_embeddings: np.ndarray,
-    train_labels: list,
-    class_prompt_labels: dict,
-    number_shot: int,
-    seed: int,
-    model_name: str,
-    model_checkpoint_path: Optional[str] = None,
-    use_all_support: bool = False,
-    text_batch_size: int = AI_HEAD_TEXT_BATCH_SIZE,
-    precomputed_text_embeddings: Optional[dict] = None,
-    text_alpha: float = 0.2,
-):
-    """Blend visual prototypes toward text anchors, scoring with cosine similarity.
-
-    Both modalities are L2-normalised before blending so the blended center lies on
-    the unit sphere after re-normalisation.  Scoring with dot product then gives
-    cosine similarity, matching zero_shot.py.
-
-    Alpha is adaptive per class:
-        effective_alpha_k = text_alpha * clip(cosine_sim(proto_k, text_k), 0, 1)
-    Classes where the visual prototype already agrees with the text anchor keep the
-    full text_alpha; classes where they diverge are pulled back toward their visual
-    prototype automatically.
-
-    text_alpha=0 → pure visual prototypes for all classes.
-    text_alpha=1 → each class blends proportionally to its visual-text agreement.
-    Returns (class_labels, class_centers, text_proto_dists, skipped_classes).
-    """
-    class_indices = defaultdict(list)
-    for i, label in enumerate(train_labels):
-        class_indices[label].append(i)
-
-    if use_all_support:
-        valid_classes = sorted(class_indices.keys())
-        skipped_classes = []
-    else:
-        valid_classes = sorted(class_indices.keys())
-        skipped_classes = []
-
-    if not valid_classes:
-        raise ValueError("No classes have enough support samples to construct AI-Head weights.")
-
-    rng = np.random.default_rng(seed)
-    prototype_labels = []
-    prototype_vectors = []
-    for label in valid_classes:
-        idxs = class_indices[label]
-        if use_all_support:
-            support_indices = idxs
-        else:
-            support_indices = rng.choice(idxs, size=min(number_shot, len(idxs)), replace=False)
-        prototype = np.mean(train_embeddings[support_indices], axis=0)
-        prototype_labels.append(label)
-        prototype_vectors.append(prototype)
-
-    prototype_matrix = np.vstack(prototype_vectors)
-    if precomputed_text_embeddings is not None:
-        text_embeddings = np.vstack([precomputed_text_embeddings[label] for label in prototype_labels])
-    else:
-        print("precomputing text embeddings for AI-Head class anchors...")
-        prompt_texts = [
-            AI_HEAD_PROMPT_TEMPLATE.format(class_prompt_labels.get(label, str(label)))
-            for label in prototype_labels
-        ]
-        # Batch text embedding extraction to reduce peak memory usage.
-        text_chunks = []
-        for i in range(0, len(prompt_texts), text_batch_size):
-            chunk = prompt_texts[i:i + text_batch_size]
-            print(f"processing chunk {i // text_batch_size + 1} / {(len(prompt_texts) + text_batch_size - 1) // text_batch_size}")
-            text_chunks.append(
-                embed_text(
-                    chunk,
-                    model_name=model_name#,
-                    #checkpoint_path=model_checkpoint_path,
-                )
-            )
-        text_embeddings = np.vstack(text_chunks)
-
-    # L2-normalise both modalities so the blend lives on the unit sphere.
-    def _l2_norm(x):
-        norms = np.linalg.norm(x, axis=1, keepdims=True)
-        return x / np.where(norms == 0, 1.0, norms)
-
-    prototype_matrix_norm = _l2_norm(prototype_matrix)
-    text_embeddings_norm  = _l2_norm(text_embeddings)
-
-    # Per-class cosine similarity between visual prototype and text anchor.
-    cosine_sims = np.sum(text_embeddings_norm * prototype_matrix_norm, axis=1)  # (C,)
-    text_proto_dists = 1.0 - cosine_sims  # cosine distance for diagnostics
-
-    # Adaptive per-class alpha: text_alpha is an upper bound.
-    # Effective alpha scales by cosine agreement — divergent classes trust text less.
-    per_class_alphas = (text_alpha * np.clip(cosine_sims, 0.0, 1.0))[:, np.newaxis]  # (C, 1)
-    print(f"  Adaptive alpha (mean={float(np.mean(per_class_alphas)):.3f}, "
-          f"min={float(np.min(per_class_alphas)):.3f}, max={float(np.max(per_class_alphas)):.3f})")
-
-    # Blend in normalised space, then re-normalise so centers stay on the unit sphere.
-    blended = (1.0 - per_class_alphas) * prototype_matrix_norm + per_class_alphas * text_embeddings_norm
-    class_centers = _l2_norm(blended)
-
-    return np.array(prototype_labels, dtype=object), class_centers, text_proto_dists, skipped_classes
-
-
 def evaluate_few_shot(
     pose_embeddings_dir: str,
     method: str = 'knn',
-    model_name: str = 'default',
-    model_checkpoint_path: Optional[str] = None,
     label_language: str = 'english',
     seed: int = 42,
     use_categories: bool = False,
@@ -429,22 +187,18 @@ def evaluate_few_shot(
     eval_split: str = 'test',
     num_shots: Optional[int] = None,
     number_shot: int = 7,
-    text_embeddings_dir: Optional[str] = None,
-    text_alpha: float = 0.2,
     output_dir: Optional[str] = None,
     max_iter: int = 100,
     class_eval: bool = False,
 ):
     """
-    Perform few-shot evaluation using KNN, linear probe, SVM, MLP, Prototypical, or AI-Head.
+    Perform few-shot evaluation using KNN, linear probe, SVM, MLP, or prototypical.
     
     For A3LIS: Uses signer-independent split with ~7 training examples per class.
     
     Args:
         pose_embeddings_dir: Directory containing precomputed pose embeddings
-        method: 'knn', 'linear_probe', 'svm', 'mlp', 'prototypical', or 'ai_head'
-        model_name: Base SignCLIP model used for AI-Head text anchors
-        model_checkpoint_path: Optional checkpoint overlaid on model_name for AI-Head text anchors
+        method: 'knn', 'linear_probe', 'svm', 'mlp', or 'prototypical'
         label_language: 'italian' or 'english' for A3LIS labels
         seed: Random seed for reproducibility
         use_categories: Use macro categories instead of micro labels
@@ -487,12 +241,12 @@ def evaluate_few_shot(
             embedding_dir, 'train', label_language, use_categories
         )
 
-    # For prototypical / ai_head, num_shots directly sets the number of support samples per class.
-    if method in {'prototypical', 'ai_head'} and num_shots is not None and num_shots > 0:
+    # For prototypical, num_shots directly sets the number of support samples per class.
+    if method == 'prototypical' and num_shots is not None and num_shots > 0:
         number_shot = num_shots
 
     # Shot limiting: keep at most num_shots examples per class (sklearn methods only)
-    if method not in {'prototypical', 'ai_head'} and num_shots is not None and num_shots > 0:
+    if method != 'prototypical' and num_shots is not None and num_shots > 0:
         class_indices = defaultdict(list)
         for i, label in enumerate(train_labels):
             class_indices[label].append(i)
@@ -647,66 +401,14 @@ def evaluate_few_shot(
 
         print(f"  Built prototypes: {len(class_labels)} classes")
 
-    elif method == 'ai_head':
-        max_support = max(train_class_counts.values())
-        if number_shot > max_support:
-            print(f"  number_shot={number_shot} exceeds max examples per class ({max_support}); capping to {max_support}.")
-            number_shot = max_support
-
-        print(
-            f"\nTraining AI-Head (number_shot={number_shot}, model={model_name}, "
-            f"checkpoint={'provided' if model_checkpoint_path else 'none'})..."
-        )
-        print("loading class prompt labels for AI-Head...")
-        class_prompt_labels = load_class_prompt_labels(embedding_dir, label_language, use_categories)
-        precomputed_text_embeddings = None
-        if text_embeddings_dir:
-            loaded_label_to_embedding = load_precomputed_text_embeddings_from_dir(text_embeddings_dir, model_name)
-            precomputed_text_embeddings = resolve_ai_head_precomputed_map(
-                target_labels=train_labels,
-                class_prompt_labels=class_prompt_labels,
-                loaded_label_to_embedding=loaded_label_to_embedding,
-            )
-            print(f"Using precomputed text embeddings from: {text_embeddings_dir}")
-        print("building AI-Head weights...")
-        class_labels, class_centers, text_proto_dists, skipped_classes = build_ai_head_weights(
-            train_embeddings=train_embeddings,
-            train_labels=train_labels,
-            class_prompt_labels=class_prompt_labels,
-            number_shot=number_shot,
-            seed=seed,
-            model_name=model_name,
-            model_checkpoint_path=model_checkpoint_path,
-            use_all_support=False,
-            precomputed_text_embeddings=precomputed_text_embeddings,
-            text_alpha=text_alpha,
-        )
-
-        if skipped_classes:
-            print(
-                f"Warning: {len(skipped_classes)} classes have < {number_shot} support samples and "
-                "will be excluded from AI-Head construction."
-            )
-        # Cosine similarity to blended, L2-normalised class centers.
-        print(f"scoring with AI-Head: cosine similarity to blended class centers (text_alpha={text_alpha:.2f})...")
-        test_norms = np.linalg.norm(test_embeddings, axis=1, keepdims=True)
-        test_embeddings_norm = test_embeddings / np.where(test_norms == 0, 1.0, test_norms)
-        probabilities = np.matmul(test_embeddings_norm, class_centers.T)  # (N, C), higher = better
-        sorted_indices = np.argsort(-probabilities, axis=1)
-        predictions = np.array([class_labels[row[0]] for row in sorted_indices], dtype=object)
-
-        print(f"  Built AI-Head: {len(class_labels)} classes, text_alpha={text_alpha:.2f}")
-        print(f"  Text-proto cosine-dist (mean={float(np.mean(text_proto_dists)):.4f}, "
-              f"min={float(np.min(text_proto_dists)):.4f}, max={float(np.max(text_proto_dists)):.4f})")
-
     else:
         raise ValueError(
-            f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', 'mlp', 'prototypical', or 'ai_head'"
+            f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', 'mlp', or 'prototypical'"
         )
     
     # Predict on test set
     print("\nEvaluating on test set...")
-    if method not in {'prototypical', 'ai_head'}:
+    if method != 'prototypical':
         if clf is None:
             raise RuntimeError("Classifier was not initialized for non-prototypical method.")
         predictions = clf.predict(test_embeddings)
@@ -830,14 +532,6 @@ def evaluate_few_shot(
         print(f"number_shot (prototype supports): {number_shot}")
         print(f"Prototype classes: {len(class_labels)}")
         print("Scoring: Euclidean distance to class prototypes (lower is better)")
-    elif method == 'ai_head':
-        print(f"number_shot (support samples): {number_shot}")
-        print(f"AI-Head classes: {len(class_labels)}")
-        print(f"Text model: {model_name}")
-        print(f"text_alpha (text blend weight): {text_alpha:.2f}")
-        if model_checkpoint_path:
-            print(f"Checkpoint: {model_checkpoint_path}")
-        print("Scoring: cosine similarity to L2-normalised blended class center")
     print(f"Seed: {seed}")
     print(f"\nRetrieval Metrics:")
     print(f"  R@1↑:             {accuracy:>7.2%}  ({hit_1:>5}/{num_test})")
@@ -911,15 +605,11 @@ def evaluate_few_shot(
             marker = "***" if label == test_labels[i] else "   "
             if method == 'prototypical':
                 print(f"    {j}. {label:<30} (distance: {score:.4f}) {marker}")
-            elif method == 'ai_head':
-                print(f"    {j}. {label:<30} (logit: {score:.4f}) {marker}")
             else:
                 print(f"    {j}. {label:<30} (score: {score:.4f}) {marker}")
     
     results = {
         'method': method,
-        'model_name': model_name,
-        'model_checkpoint_path': model_checkpoint_path,
         'recall@1': accuracy,
         'accuracy': accuracy,
         'recall@5': recall_5,
@@ -934,8 +624,6 @@ def evaluate_few_shot(
         'eval_split': eval_split,
         'train_split': train_split,
         'pose_embeddings_dir': str(pose_embeddings_dir),
-        'text_embeddings_dir': text_embeddings_dir,
-        'text_alpha': text_alpha if method == 'ai_head' else None,
         'class_eval': class_eval,
     }
 
@@ -954,7 +642,7 @@ def evaluate_few_shot(
     if output_dir:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
-        if method in {'prototypical', 'ai_head'}:
+        if method == 'prototypical':
             shots_str = f"{number_shot}shot"
         else:
             shots_str = f"{num_shots}shot" if num_shots else "allshot"
@@ -994,16 +682,8 @@ def evaluate_single_fold(
     test_labels: list,
     test_signer: str,
     method: str,
-    embedding_dir: Path,
-    label_language: str,
-    use_categories: bool,
-    model_name: str,
-    model_checkpoint_path: Optional[str],
-    class_prompt_labels: Optional[dict],
-    precomputed_text_embeddings: Optional[dict],
     seed: int,
     max_iter: int = 100,
-    text_alpha: float = 0.2,
 ):
     """Evaluate a single LOSO fold."""
     
@@ -1045,32 +725,11 @@ def evaluate_single_fold(
         )
         sorted_indices = np.argsort(probabilities, axis=1)
         predictions = np.array([class_labels[row[0]] for row in sorted_indices], dtype=object)
-    elif method == 'ai_head':
-        local_prompt_labels = class_prompt_labels
-        if local_prompt_labels is None:
-            local_prompt_labels = load_class_prompt_labels(embedding_dir, label_language, use_categories)
-        class_labels, class_centers, _, _ = build_ai_head_weights(
-            train_embeddings=train_embeddings,
-            train_labels=train_labels,
-            class_prompt_labels=local_prompt_labels,
-            number_shot=1,
-            seed=seed,
-            model_name=model_name,
-            model_checkpoint_path=model_checkpoint_path,
-            use_all_support=True,
-            precomputed_text_embeddings=precomputed_text_embeddings,
-            text_alpha=text_alpha,
-        )
-        test_norms = np.linalg.norm(test_embeddings, axis=1, keepdims=True)
-        test_embeddings_norm = test_embeddings / np.where(test_norms == 0, 1.0, test_norms)
-        probabilities = np.matmul(test_embeddings_norm, class_centers.T)
-        sorted_indices = np.argsort(-probabilities, axis=1)
-        predictions = np.array([class_labels[row[0]] for row in sorted_indices], dtype=object)
     else:
-        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', 'prototypical', or 'ai_head'")
+        raise ValueError(f"Unknown method: {method}. Choose 'knn', 'linear_probe', 'svm', or 'prototypical'")
     
     # Predict
-    if method not in {'prototypical', 'ai_head'}:
+    if method != 'prototypical':
         if clf is None:
             raise RuntimeError("Classifier was not initialized for non-prototypical LOSO method.")
         predictions = clf.predict(test_embeddings)
@@ -1102,8 +761,6 @@ def evaluate_single_fold(
         if probabilities is not None:
             if method == 'prototypical':
                 sorted_indices = np.argsort(probabilities[i])
-            elif method == 'ai_head':
-                sorted_indices = np.argsort(-probabilities[i])
             else:
                 sorted_indices = np.argsort(-probabilities[i])
             ranked_labels = [class_labels[idx] for idx in sorted_indices]
@@ -1165,13 +822,9 @@ def evaluate_single_fold(
 def run_loso_cross_validation(
     pose_embeddings_dir: str,
     method: str,
-    model_name: str,
-    model_checkpoint_path: Optional[str],
     label_language: str,
     use_categories: bool,
     seed: int,
-    text_embeddings_dir: Optional[str] = None,
-    text_alpha: float = 0.2,
     fold: Optional[int] = None,
     output_dir: Optional[str] = None,
     max_iter: int = 100
@@ -1181,9 +834,7 @@ def run_loso_cross_validation(
     
     Args:
         pose_embeddings_dir: Directory containing precomputed embeddings
-        method: 'knn', 'linear_probe', 'svm', 'prototypical', or 'ai_head'
-        model_name: Base SignCLIP model used for AI-Head text anchors
-        model_checkpoint_path: Optional checkpoint for AI-Head text anchors
+        method: 'knn', 'linear_probe', 'svm', or 'prototypical'
         label_language: 'italian' or 'english'
         use_categories: Use macro categories instead of micro labels
         seed: Random seed
@@ -1211,38 +862,6 @@ def run_loso_cross_validation(
     if len(unique_signers) != 10:
         print(f"WARNING: Expected 10 signers for A3LIS, found {len(unique_signers)}")
 
-    # Build text anchors once for AI-Head and reuse across folds to avoid repeated heavy embedding calls.
-    ai_head_prompt_labels = None
-    ai_head_text_embedding_map = None
-    if method == 'ai_head':
-        ai_head_prompt_labels = load_class_prompt_labels(embedding_dir, label_language, use_categories)
-        all_labels = sorted(set(labels))
-        if text_embeddings_dir:
-            loaded_label_to_embedding = load_precomputed_text_embeddings_from_dir(text_embeddings_dir, model_name)
-            ai_head_text_embedding_map = resolve_ai_head_precomputed_map(
-                target_labels=all_labels,
-                class_prompt_labels=ai_head_prompt_labels,
-                loaded_label_to_embedding=loaded_label_to_embedding,
-            )
-            print(f"Using precomputed text embeddings from: {text_embeddings_dir}")
-        else:
-            prompt_texts = [
-                AI_HEAD_PROMPT_TEMPLATE.format(ai_head_prompt_labels.get(label, str(label)))
-                for label in all_labels
-            ]
-            text_chunks = []
-            for i in range(0, len(prompt_texts), AI_HEAD_TEXT_BATCH_SIZE):
-                chunk = prompt_texts[i:i + AI_HEAD_TEXT_BATCH_SIZE]
-                text_chunks.append(
-                    embed_text(
-                        chunk,
-                        model_name=model_name,
-                        checkpoint_path=model_checkpoint_path,
-                    )
-                )
-            text_embs = np.vstack(text_chunks)
-            ai_head_text_embedding_map = {label: emb for label, emb in zip(all_labels, text_embs)}
-    
     # Run LOSO cross-validation
     all_results = []
     
@@ -1265,8 +884,7 @@ def run_loso_cross_validation(
         fold_result = evaluate_single_fold(
             fold_idx, train_embeddings, train_labels,
             test_embeddings, test_labels, test_signer,
-            method, embedding_dir, label_language, use_categories, model_name, model_checkpoint_path,
-            ai_head_prompt_labels, ai_head_text_embedding_map, seed, max_iter, text_alpha
+            method, seed, max_iter
         )
         
         all_results.append(fold_result)
@@ -1326,8 +944,7 @@ def run_loso_cross_validation(
                 writer = csv.DictWriter(
                     f,
                     fieldnames=[
-                        'method', 'pose_embeddings_dir', 'model_name', 'model_checkpoint_path',
-                        'text_embeddings_dir', 'label_language', 'use_categories', 'seed',
+                        'method', 'pose_embeddings_dir', 'label_language', 'use_categories', 'seed',
                         'r@1_mean', 'r@1_std', 'r@5_mean', 'r@5_std',
                         'r@10_mean', 'r@10_std', 'median_rank_mean', 'median_rank_std'
                     ]
@@ -1336,9 +953,6 @@ def run_loso_cross_validation(
                 writer.writerow({
                     'method': method,
                     'pose_embeddings_dir': pose_embeddings_dir,
-                    'model_name': model_name,
-                    'model_checkpoint_path': model_checkpoint_path,
-                    'text_embeddings_dir': text_embeddings_dir,
                     'label_language': label_language,
                     'use_categories': use_categories,
                     'seed': seed,
@@ -1389,23 +1003,13 @@ Methods:
   svm          - Support Vector Machine with RBF kernel (advanced non-linear)
     mlp          - Scikit-learn MLP with SmartHead-like hidden widths
     prototypical - Class-average prototypes with Euclidean-distance ranking (no scaling)
-    ai_head      - Adaptive Iconicity Head with text-prototype fusion and per-class alpha
 """
     )
     parser.add_argument('--pose_embeddings_dir', type=str, required=True,
                         help='Directory containing precomputed pose .npy embeddings')
     parser.add_argument('--method', type=str, required=True,
-                        choices=['knn', 'linear_probe', 'svm', 'mlp', 'prototypical', 'ai_head'],
+                                                choices=['knn', 'linear_probe', 'svm', 'mlp', 'prototypical'],
                         help='Few-shot method to use')
-    parser.add_argument('--model_name', type=str, default='default',
-                        choices=['default', 'asl_citizen', 'asl_finetune', 'suisse', 'a3lis_finetune'],
-                        help='Base SignCLIP model used for AI-Head text anchors (default: default)')
-    parser.add_argument('--model_checkpoint_path', type=str, default=None,
-                        help='Optional checkpoint path overlaid on --model_name for AI-Head text anchors')
-    parser.add_argument('--text_embeddings_dir', type=str, default=None,
-                        help='Optional directory with precomputed text embeddings (text_embeddings*.npy + labels metadata). Used by ai_head.')
-    parser.add_argument('--ai_head_alpha', type=float, default=0.2,
-                        help='AI-Head text blend weight: 0.0=pure prototype, 1.0=pure text (default: 0.2). Only used with --method ai_head.')
     parser.add_argument('--label_language', type=str, default='english',
                         choices=['italian', 'english'],
                         help='Language for A3LIS labels (default: english)')
@@ -1461,13 +1065,9 @@ Methods:
         run_loso_cross_validation(
             pose_embeddings_dir=args.pose_embeddings_dir,
             method=args.method,
-            model_name=args.model_name,
-            model_checkpoint_path=args.model_checkpoint_path,
             label_language=args.label_language,
             use_categories=args.use_categories,
             seed=args.seed,
-            text_embeddings_dir=args.text_embeddings_dir,
-            text_alpha=args.ai_head_alpha,
             fold=args.fold,
             output_dir=args.output_dir,
             max_iter=args.max_iter,
@@ -1477,8 +1077,6 @@ Methods:
         evaluate_few_shot(
             pose_embeddings_dir=args.pose_embeddings_dir,
             method=args.method,
-            model_name=args.model_name,
-            model_checkpoint_path=args.model_checkpoint_path,
             label_language=args.label_language,
             seed=args.seed,
             use_categories=args.use_categories,
@@ -1486,8 +1084,6 @@ Methods:
             eval_split=args.eval_split,
             num_shots=args.num_shots,
             number_shot=args.number_shot,
-            text_embeddings_dir=args.text_embeddings_dir,
-            text_alpha=args.ai_head_alpha,
             output_dir=args.output_dir,
             max_iter=args.max_iter,
             class_eval=args.class_eval,
