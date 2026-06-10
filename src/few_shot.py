@@ -36,6 +36,7 @@ Usage:
 import argparse
 import sys
 import json
+import csv
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
@@ -432,6 +433,7 @@ def evaluate_few_shot(
     text_alpha: float = 0.2,
     output_dir: Optional[str] = None,
     max_iter: int = 100,
+    class_eval: bool = False,
 ):
     """
     Perform few-shot evaluation using KNN, linear probe, SVM, MLP, Prototypical, or AI-Head.
@@ -456,6 +458,7 @@ def evaluate_few_shot(
                    for 1-shot / 5-shot evaluation). Default: use all available examples.
         number_shot: Support examples per class for prototypical method (default: 7, max: 7).
         output_dir: Directory to save results JSON. If None, results are not saved.
+        class_eval: Print per-class retrieval metrics and save per-class metrics to JSON.
     """
     np.random.seed(seed)
     
@@ -734,6 +737,7 @@ def evaluate_few_shot(
     ranks = []
     
     category_stats = {}
+    class_stats = {}
     # For ranking, we need class probabilities or distances
     if class_labels is None:
         raise RuntimeError("Class labels were not computed.")
@@ -745,11 +749,17 @@ def evaluate_few_shot(
         if cat not in category_stats:
             category_stats[cat] = {'total': 0, 'hit_1': 0, 'hit_5': 0, 'hit_10': 0, 'ranks': []}
         category_stats[cat]['total'] += 1
+        if class_eval and gold_label not in class_stats:
+            class_stats[gold_label] = {'total': 0, 'hit_1': 0, 'hit_5': 0, 'hit_10': 0, 'ranks': []}
+        if class_eval:
+            class_stats[gold_label]['total'] += 1
         
         # Top-1 accuracy
         if pred_label == gold_label:
             hit_1 += 1
             category_stats[cat]['hit_1'] += 1
+            if class_eval:
+                class_stats[gold_label]['hit_1'] += 1
         
         # For top-5 and top-10, we need to rank all classes
         if probabilities is not None:
@@ -776,18 +786,26 @@ def evaluate_few_shot(
         if gold_label in ranked_labels[:5]:
             hit_5 += 1
             category_stats[cat]['hit_5'] += 1
+            if class_eval:
+                class_stats[gold_label]['hit_5'] += 1
         if gold_label in ranked_labels[:10]:
             hit_10 += 1
             category_stats[cat]['hit_10'] += 1
+            if class_eval:
+                class_stats[gold_label]['hit_10'] += 1
         
         # Get rank
         if gold_label in ranked_labels:
             rank = ranked_labels.index(gold_label)
             ranks.append(rank)
             category_stats[cat]['ranks'].append(rank)
+            if class_eval:
+                class_stats[gold_label]['ranks'].append(rank)
         else:
             ranks.append(len(ranked_labels))
             category_stats[cat]['ranks'].append(len(ranked_labels))
+            if class_eval:
+                class_stats[gold_label]['ranks'].append(len(ranked_labels))
     
     # Calculate final metrics
     num_test = len(test_labels)
@@ -847,6 +865,22 @@ def evaluate_few_shot(
             
             print(f"  {cat:<18} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
 
+    if class_eval:
+        print(f"\n{'='*90}")
+        print(f"Metrics by Class Label")
+        print(f"{'='*90}")
+        print(f"  {'Class':<35} | {'Total':<5} | {'R@1':<7} | {'R@5':<7} | {'R@10':<7} | {'MedianR':<7}")
+        print(f"  {'-'*35}-+-{'-'*5}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}-+-{'-'*7}")
+
+        for cls, stats in sorted(class_stats.items()):
+            tot = stats['total']
+            r1 = stats['hit_1'] / tot
+            r5 = stats['hit_5'] / tot
+            r10 = stats['hit_10'] / tot
+            med_r = statistics.median(stats['ranks']) + 1 if stats['ranks'] else 0.0
+            cls_display = str(cls)[:35]
+            print(f"  {cls_display:<35} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
+
     print(f"{'='*60}\n")
     
     # Show some example predictions
@@ -904,7 +938,20 @@ def evaluate_few_shot(
         'pose_embeddings_dir': str(pose_embeddings_dir),
         'text_embeddings_dir': text_embeddings_dir,
         'text_alpha': text_alpha if method == 'ai_head' else None,
+        'class_eval': class_eval,
     }
+
+    if class_eval:
+        results['class_metrics'] = {
+            cls: {
+                'total': stats['total'],
+                'recall@1': stats['hit_1'] / stats['total'],
+                'recall@5': stats['hit_5'] / stats['total'],
+                'recall@10': stats['hit_10'] / stats['total'],
+                'median_rank': (statistics.median(stats['ranks']) + 1) if stats['ranks'] else 0.0,
+            }
+            for cls, stats in sorted(class_stats.items())
+        }
 
     if output_dir:
         output_path = Path(output_dir)
@@ -914,11 +961,29 @@ def evaluate_few_shot(
         else:
             shots_str = f"{num_shots}shot" if num_shots else "allshot"
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"few_shot_{method}_{shots_str}_{train_split}_{eval_split}_{timestamp}.json"
+        filename = f"few_shot_{method}_{shots_str}_{train_split}_{eval_split}_{timestamp}.csv"
         results_file = output_path / filename
-        with open(results_file, 'w') as f:
-            json.dump(results, f, indent=2)
+        scalar_results = {
+            key: value for key, value in results.items()
+            if key != 'class_metrics'
+        }
+        with open(results_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=list(scalar_results.keys()))
+            writer.writeheader()
+            writer.writerow(scalar_results)
         print(f"\nResults saved to {results_file}")
+
+        if class_eval and 'class_metrics' in results:
+            class_results_file = output_path / f"few_shot_{method}_{shots_str}_{train_split}_{eval_split}_{timestamp}_class_metrics.csv"
+            with open(class_results_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=['class_label', 'total', 'recall@1', 'recall@5', 'recall@10', 'median_rank']
+                )
+                writer.writeheader()
+                for class_label, metrics in results['class_metrics'].items():
+                    writer.writerow({'class_label': class_label, **metrics})
+            print(f"Class metrics saved to {class_results_file}")
 
     return results
 
@@ -1245,30 +1310,52 @@ def run_loso_cross_validation(
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
             
-            results_file = output_path / f'loso_{method}_results.json'
-            with open(results_file, 'w') as f:
-                json.dump({
+            results_file = output_path / f'loso_{method}_results.csv'
+            with open(results_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        'fold', 'test_signer', 'r@1', 'r@5', 'r@10', 'median_rank',
+                        'hit_1', 'hit_5', 'hit_10', 'num_test', 'num_train', 'num_classes'
+                    ]
+                )
+                writer.writeheader()
+                for row in all_results:
+                    writer.writerow(row)
+
+            summary_file = output_path / f'loso_{method}_summary.csv'
+            with open(summary_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        'method', 'pose_embeddings_dir', 'model_name', 'model_checkpoint_path',
+                        'text_embeddings_dir', 'label_language', 'use_categories', 'seed',
+                        'r@1_mean', 'r@1_std', 'r@5_mean', 'r@5_std',
+                        'r@10_mean', 'r@10_std', 'median_rank_mean', 'median_rank_std'
+                    ]
+                )
+                writer.writeheader()
+                writer.writerow({
                     'method': method,
                     'pose_embeddings_dir': pose_embeddings_dir,
-                    'all_folds': all_results,
-                    'average': {
-                        'r@1': {'mean': avg_r1, 'std': std_r1},
-                        'r@5': {'mean': avg_r5, 'std': std_r5},
-                        'r@10': {'mean': avg_r10, 'std': std_r10},
-                        'median_rank': {'mean': avg_median_rank, 'std': std_median_rank}
-                    },
-                    'hyperparameters': {
-                        'method': method,
-                        'model_name': model_name,
-                        'model_checkpoint_path': model_checkpoint_path,
-                        'text_embeddings_dir': text_embeddings_dir,
-                        'label_language': label_language,
-                        'use_categories': use_categories,
-                        'seed': seed,
-                    }
-                }, f, indent=2)
+                    'model_name': model_name,
+                    'model_checkpoint_path': model_checkpoint_path,
+                    'text_embeddings_dir': text_embeddings_dir,
+                    'label_language': label_language,
+                    'use_categories': use_categories,
+                    'seed': seed,
+                    'r@1_mean': avg_r1,
+                    'r@1_std': std_r1,
+                    'r@5_mean': avg_r5,
+                    'r@5_std': std_r5,
+                    'r@10_mean': avg_r10,
+                    'r@10_std': std_r10,
+                    'median_rank_mean': avg_median_rank,
+                    'median_rank_std': std_median_rank,
+                })
             
-            print(f"Results saved to {results_file}\n")
+            print(f"Results saved to {results_file}")
+            print(f"Summary saved to {summary_file}\n")
     
     return all_results
 
@@ -1335,7 +1422,7 @@ Methods:
     parser.add_argument('--fold', type=int, default=None,
                         help='Run specific fold (0-9) in LOSO mode, or None for all folds')
     parser.add_argument('--output_dir', type=str, default='runs/few_shot',
-                        help='Output directory for results JSON (LOSO and standard mode)')
+                        help='Output directory for results CSV (LOSO and standard mode)')
     parser.add_argument('--num_shots', type=int, default=None,
                         help='Limit training examples per class (e.g. 1 or 5 for shot-limited '
                              'evaluation). Default: use all available training examples. '
@@ -1362,12 +1449,16 @@ Methods:
                         ))
     parser.add_argument('--max_iter', type=int, default=100, dest='max_iter',
                         help='Maximum iterations for linear_probe, svm, and mlp (default: 100).')
+    parser.add_argument('--class_eval', action='store_true',
+                        help='Print per-class retrieval metrics and save per-class metrics to CSV (standard mode only).')
         
     args = parser.parse_args()
 
     if args.loso:
         if args.method == 'mlp':
             raise ValueError("method='mlp' is currently supported only in standard split mode (without --loso).")
+        if args.class_eval:
+            print("Warning: --class_eval is currently ignored in --loso mode.")
         # Run LOSO cross-validation
         run_loso_cross_validation(
             pose_embeddings_dir=args.pose_embeddings_dir,
@@ -1401,6 +1492,7 @@ Methods:
             text_alpha=args.ai_head_alpha,
             output_dir=args.output_dir,
             max_iter=args.max_iter,
+            class_eval=args.class_eval,
         )
 
 

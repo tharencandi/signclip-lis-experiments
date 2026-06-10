@@ -49,6 +49,7 @@ Prompt Types:
 import argparse
 import sys
 import json
+import csv
 from pathlib import Path
 import numpy as np
 import statistics
@@ -724,7 +725,7 @@ def evaluate_zero_shot(
         for cls, clii in top_clii_classes:
             print(f"  {cls:<35} CLII={clii:.4f}")
 
-        # Optional plot export (saved alongside result JSON files)
+        # Optional plot export (saved alongside result CSV files)
         prompt_str_for_plot = prompt_type if prompt_type else ('custom' if text_template else 'raw')
         label_str_for_plot = 'categories' if use_categories else label_language
         plot_dir = output_dir if output_dir else 'runs/zero_shot'
@@ -819,7 +820,7 @@ def evaluate_zero_shot(
             'max': float(np.max(clii_values)) if clii_values else 0.0,
         }
     
-    # Save results to JSON if output_dir specified
+    # Save results to CSV if output_dir specified
     if output_dir:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -828,13 +829,54 @@ def evaluate_zero_shot(
         prompt_str = prompt_type if prompt_type else 'custom' if text_template else 'raw'
         label_str = 'categories' if use_categories else label_language
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}.json"
+        filename = f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}.csv"
         
         results_file = output_path / filename
-        with open(results_file, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
+        scalar_results = {
+            key: value for key, value in results.items()
+            if key not in {'class_metrics', 'cmc_curve', 'clii_summary'}
+        }
+        with open(results_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=list(scalar_results.keys()))
+            writer.writeheader()
+            writer.writerow(scalar_results)
         
         print(f"\nResults saved to {results_file}")
+
+        if class_eval and 'class_metrics' in results:
+            class_metrics_file = output_path / f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}_class_metrics.csv"
+            with open(class_metrics_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        'class_label', 'total', 'recall@1', 'recall@5', 'recall@10',
+                        'median_rank', 'clii', 'tier', 'retrieval_neighborhood'
+                    ]
+                )
+                writer.writeheader()
+                for class_label, metrics in results['class_metrics'].items():
+                    writer.writerow({'class_label': class_label, **metrics})
+            print(f"Class metrics saved to {class_metrics_file}")
+
+        if class_eval and 'cmc_curve' in results:
+            cmc_file = output_path / f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}_cmc_curve.csv"
+            with open(cmc_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=['rank', 'accuracy'])
+                writer.writeheader()
+                for rank, accuracy_value in zip(results['cmc_curve']['ranks'], results['cmc_curve']['accuracies']):
+                    writer.writerow({'rank': rank, 'accuracy': accuracy_value})
+            print(f"CMC data saved to {cmc_file}")
+
+        if class_eval and 'clii_summary' in results:
+            clii_file = output_path / f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}_clii_summary.csv"
+            with open(clii_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=['definition', 'mean', 'median', 'min', 'max']
+                )
+                writer.writeheader()
+                writer.writerow(results['clii_summary'])
+            print(f"CLII summary saved to {clii_file}")
     
     return results
 
@@ -896,9 +938,9 @@ Available prompt types:
                         choices=['micro', 'macro'],
                         help='Label granularity (legacy format only)')
     parser.add_argument('--output_dir', type=str, default='runs/zero_shot',
-                        help='Output directory for results JSON (default: runs/zero_shot)')
+                        help='Output directory for results CSV (default: runs/zero_shot)')
     parser.add_argument('--class_eval', action='store_true',
-                        help='Print per-class retrieval metrics and save per-class metrics to JSON')
+                        help='Print per-class retrieval metrics and save per-class metrics to CSV')
     
     args = parser.parse_args()
     
