@@ -19,12 +19,12 @@ dataset:
   aligner: DSAligner
   pose_components: 'reduced_face'
   augment_temporal: true
-  # Current active augmentation regime (v3 - maximally aggressive).
-  aug_sigma_temporal: 0.5
-  aug_sigma_spatial: 0.5
-  aug_sigma_noise: 0.005
-  aug_p_flip: 0.5
-  aug_strength_max: 8.0
+  # Current active augmentation regime (reverted to v2 levels).
+  aug_sigma_temporal: 0.3
+  aug_sigma_spatial: 0.3
+  aug_sigma_noise: 0.002
+  aug_p_flip: 0.4
+  aug_strength_max: 5.0
 
   # Saved experiment history for reproducibility.
   aug_regime_notes:
@@ -48,7 +48,16 @@ dataset:
       aug_sigma_noise: 0.005
       aug_p_flip: 0.5
       aug_strength_max: 8.0
-      note: maximally aggressive - third attempt
+      note: damaging - too aggressive
+    v4:
+      aug_sigma_temporal: 0.3
+      aug_sigma_spatial: 0.3
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.4
+      aug_strength_max: 5.0
+      weight_decay: 0.05
+      max_epoch: 20
+      note: v2 aug with stronger regularization and shorter training
 fairseq:
   common:
     fp16: true
@@ -66,9 +75,9 @@ fairseq:
     lr_scheduler: polynomial_decay
     total_num_update: 1000000
     warmup_updates: 122
-    weight_decay: 0.01
+    weight_decay: 0.05
     ddp_backend: no_c10d
-    max_epoch: 50
+    max_epoch: 25
   checkpoint:
     no_epoch_checkpoints: true
     reset_optimizer: true
