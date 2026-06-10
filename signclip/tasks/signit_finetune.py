@@ -1,10 +1,20 @@
-"""Fine-tuning SignCLIP on the SignIT dataset with Global NCE only."""
+"""Fine-tuning SignCLIP on the SignIT dataset with Global NCE only.
+
+Training regime summary:
+- Class imbalance is handled with a WeightedRandomSampler using per-sample
+    weights proportional to 1 / class_count(label), so rare classes are sampled
+    more often and class exposure is balanced in expectation across training.
+- Data augmentation strength is class-aware and inversely proportional to class
+    count. Rarer classes receive stronger temporal/spatial/noise perturbations
+    (and higher flip probability) to reduce overfitting when the same few
+    examples are reused.
+"""
 
 from tqdm import tqdm
 import torch
 import torch.nn.functional as F
 from torch import optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from signclip.tasks.retritask import RetriTask
 from signclip.datasets.signit_dataset import SignITDataset
@@ -93,13 +103,39 @@ class fineTuneSignIT(RetriTask):
                 f"SignIT val dataset is empty. Check POSES_ROOT={POSES_ROOT} and split labels embedded in filenames."
             )
 
+        # Build class-frequency stats used for both weighted sampling and
+        # augmentation intensity scaling (rarer classes get stronger aug).
+        self.label_counts = self._compute_label_counts(self.train_dataset)
+        self.mean_label_count = float(sum(self.label_counts.values())) / float(len(self.label_counts))
+
+        sample_weights = self._compute_sample_weights(self.train_dataset, self.label_counts)
+        train_sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
+
+        min_count = min(self.label_counts.values())
+        max_count = max(self.label_counts.values())
+        print(
+            "Train class count stats: "
+            f"classes={len(self.label_counts)}, min={min_count}, max={max_count}, "
+            f"mean={self.mean_label_count:.2f}"
+        )
+
         batch_size = getattr(config.fairseq.dataset, 'batch_size', 16)
         num_workers = getattr(config.fairseq.dataset, 'num_workers', 0)
+
+        self.aug_sigma_temporal = getattr(config.dataset, 'aug_sigma_temporal', 0.2)
+        self.aug_sigma_spatial = getattr(config.dataset, 'aug_sigma_spatial', 0.2)
+        self.aug_sigma_noise = getattr(config.dataset, 'aug_sigma_noise', 0.001)
+        self.aug_p_flip = getattr(config.dataset, 'aug_p_flip', 0.2)
+        self.aug_strength_max = getattr(config.dataset, 'aug_strength_max', 3.0)
 
         self.train_data = DataLoader(
             self.train_dataset,
             batch_size=batch_size,
-            shuffle=True,
+            sampler=train_sampler,
             collate_fn=self.train_pose_collate_fn,
             num_workers=num_workers,
             drop_last=False,
@@ -116,6 +152,34 @@ class fineTuneSignIT(RetriTask):
         print(f"Pre-computing text embeddings for {self._all_class_caps.size(0)} classes...")
         self.all_text_embeds = self._encode_all_class_texts()
         print(f"  done. Shape: {self.all_text_embeds.shape}")
+
+    @staticmethod
+    def _compute_label_counts(dataset):
+        counts = {}
+        for sample in dataset.meta_processor.samples:
+            label_idx = dataset.meta_processor.label_map[sample['label']]
+            counts[label_idx] = counts.get(label_idx, 0) + 1
+        return counts
+
+    @staticmethod
+    def _compute_sample_weights(dataset, label_counts):
+        weights = []
+        for sample in dataset.meta_processor.samples:
+            label_idx = dataset.meta_processor.label_map[sample['label']]
+            weights.append(1.0 / float(label_counts[label_idx]))
+        return torch.tensor(weights, dtype=torch.double)
+
+    def _augmentation_kwargs_for_label(self, label_idx):
+        count = max(1, int(self.label_counts.get(int(label_idx), 1)))
+        # Rare classes (small count) receive stronger augmentation.
+        strength = self.mean_label_count / float(count)
+        strength = min(max(strength, 1.0), float(self.aug_strength_max))
+        return {
+            'sigma_temporal': float(self.aug_sigma_temporal) * strength,
+            'sigma_spatial': float(self.aug_sigma_spatial) * strength,
+            'sigma_noise': float(self.aug_sigma_noise) * strength,
+            'p_flip': min(float(self.aug_p_flip) * strength, 0.9),
+        }
 
     def _build_all_class_tokens(self, dataset, max_text_len):
         num_classes = len(dataset.meta_processor.label_map)
@@ -268,7 +332,13 @@ class fineTuneSignIT(RetriTask):
         poses = []
         lengths = []
         for item in batch:
-            pose = preprocess_pose(item['pose'], max_frames=MAX_FRAMES, augment=augment)[0]
+            aug_kwargs = self._augmentation_kwargs_for_label(item['label']) if augment else {}
+            pose = preprocess_pose(
+                item['pose'],
+                max_frames=MAX_FRAMES,
+                augment=augment,
+                **aug_kwargs,
+            )[0]
             poses.append(pose)
             lengths.append(pose.shape[0])
 
