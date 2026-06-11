@@ -19,8 +19,8 @@ dataset:
   aligner: DSAligner
   pose_components: 'reduced_face'
   augment_temporal: true
-  use_weighted_sampler: false
-  # Current active regime: v8 - strict spatial augmentation (preserve LIS grammar)
+  use_weighted_sampler: true
+  # Current active regime: v8.1 - balanced ablation (conservative spatial + weighted sampling)
   aug_sigma_temporal: 0.25
   aug_sigma_spatial: 0.15
   aug_sigma_noise: 0.002
@@ -112,6 +112,15 @@ dataset:
       aug_p_flip: 0.0
       aug_strength_max: 3.5
       note: Conservative spatial augmentation - preserve LIS spatial grammar. Reduce hand cropping, eliminate horizontal flip, keep helpful temporal jitter.
+    v8_1_the_balanced_ablation:
+      augment_temporal: true
+      use_weighted_sampler: true
+      aug_sigma_temporal: 0.25
+      aug_sigma_spatial: 0.15
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.0
+      aug_strength_max: 3.5
+      note: v8 spatial preservation + weighted sampling from v6 to maximize macro F1. Combines conservative spatial distortion (keep hands visible, no flip) with class-aware sampling to boost discriminability on rarer classes.
 fairseq:
   common:
     fp16: true
