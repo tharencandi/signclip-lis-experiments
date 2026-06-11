@@ -50,6 +50,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.metrics import precision_recall_fscore_support
 # Add project root to path for signclip imports
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
@@ -190,6 +191,7 @@ def evaluate_few_shot(
     output_dir: Optional[str] = None,
     max_iter: int = 100,
     class_eval: bool = False,
+    extra_metrics: bool = False,
 ):
     """
     Perform few-shot evaluation using KNN, linear probe, SVM, MLP, or prototypical.
@@ -541,6 +543,23 @@ def evaluate_few_shot(
     print(f"\nAccuracy:")
     print(f"  Top-1:            {accuracy:>7.2%}  ({hit_1:>5}/{num_test})")
 
+    extra_metrics_results = None
+    if extra_metrics:
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
+            test_labels, predictions, average='macro', zero_division=0
+        )
+        precision_weighted, recall_weighted, f1_weighted, _ = precision_recall_fscore_support(
+            test_labels, predictions, average='weighted', zero_division=0
+        )
+        extra_metrics_results = {
+            'precision_macro': float(precision_macro),
+            'recall_macro': float(recall_macro),
+            'f1_macro': float(f1_macro),
+            'precision_weighted': float(precision_weighted),
+            'recall_weighted': float(recall_weighted),
+            'f1_weighted': float(f1_weighted),
+        }
+
     if not use_categories:
         print(f"\n{'='*75}")
         print(f"Metrics by Category (Predicting exact words)")
@@ -572,6 +591,16 @@ def evaluate_few_shot(
             med_r = statistics.median(stats['ranks']) + 1 if stats['ranks'] else 0.0
             cls_display = str(cls)[:35]
             print(f"  {cls_display:<35} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
+
+    if extra_metrics and extra_metrics_results is not None:
+        print(f"\nClassification Metrics (Top-1 Predictions):")
+        print(f"  Accuracy↑:        {accuracy:>7.2%}")
+        print(f"  Precision (class-mean/macro):   {extra_metrics_results['precision_macro']:>7.4f}")
+        print(f"  Recall (class-mean/macro):      {extra_metrics_results['recall_macro']:>7.4f}")
+        print(f"  F1 (class-mean/macro):          {extra_metrics_results['f1_macro']:>7.4f}")
+        print(f"  Precision (weighted):{extra_metrics_results['precision_weighted']:>7.4f}")
+        print(f"  Recall (weighted):   {extra_metrics_results['recall_weighted']:>7.4f}")
+        print(f"  F1 (weighted):       {extra_metrics_results['f1_weighted']:>7.4f}")
 
     print(f"{'='*60}\n")
     
@@ -625,7 +654,11 @@ def evaluate_few_shot(
         'train_split': train_split,
         'pose_embeddings_dir': str(pose_embeddings_dir),
         'class_eval': class_eval,
+        'extra_metrics': extra_metrics,
     }
+
+    if extra_metrics and extra_metrics_results is not None:
+        results.update(extra_metrics_results)
 
     if class_eval:
         results['class_metrics'] = {
@@ -684,6 +717,7 @@ def evaluate_single_fold(
     method: str,
     seed: int,
     max_iter: int = 100,
+    extra_metrics: bool = False,
 ):
     """Evaluate a single LOSO fold."""
     
@@ -790,6 +824,23 @@ def evaluate_single_fold(
     r_at_5 = hit_5 / num_test
     r_at_10 = hit_10 / num_test
     median_rank = statistics.median(ranks) + 1 if ranks else float('inf')
+
+    extra_metrics_results = None
+    if extra_metrics:
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
+            test_labels, predictions, average='macro', zero_division=0
+        )
+        precision_weighted, recall_weighted, f1_weighted, _ = precision_recall_fscore_support(
+            test_labels, predictions, average='weighted', zero_division=0
+        )
+        extra_metrics_results = {
+            'precision_macro': float(precision_macro),
+            'recall_macro': float(recall_macro),
+            'f1_macro': float(f1_macro),
+            'precision_weighted': float(precision_weighted),
+            'recall_weighted': float(recall_weighted),
+            'f1_weighted': float(f1_weighted),
+        }
     
     print(f"\n{'='*60}")
     print(f"Fold {fold + 1} Results (Test Signer: {test_signer})")
@@ -801,9 +852,16 @@ def evaluate_single_fold(
     print(f"  R@5↑:        {r_at_5:>7.2%}  ({hit_5:>5}/{num_test})")
     print(f"  R@10↑:       {r_at_10:>7.2%}  ({hit_10:>5}/{num_test})")
     print(f"  MedianR↓:    {median_rank:>7.1f}")
+    if extra_metrics and extra_metrics_results is not None:
+        print(f"  Precision (class-mean/macro):   {extra_metrics_results['precision_macro']:.4f}")
+        print(f"  Recall (class-mean/macro):      {extra_metrics_results['recall_macro']:.4f}")
+        print(f"  F1 (class-mean/macro):          {extra_metrics_results['f1_macro']:.4f}")
+        print(f"  Precision (weighted):{extra_metrics_results['precision_weighted']:.4f}")
+        print(f"  Recall (weighted):   {extra_metrics_results['recall_weighted']:.4f}")
+        print(f"  F1 (weighted):       {extra_metrics_results['f1_weighted']:.4f}")
     print(f"{'='*60}\n")
-    
-    return {
+
+    fold_results = {
         'fold': fold,
         'test_signer': test_signer,
         'r@1': r_at_1,
@@ -818,6 +876,11 @@ def evaluate_single_fold(
         'num_classes': num_classes
     }
 
+    if extra_metrics and extra_metrics_results is not None:
+        fold_results.update(extra_metrics_results)
+
+    return fold_results
+
 
 def run_loso_cross_validation(
     pose_embeddings_dir: str,
@@ -827,7 +890,8 @@ def run_loso_cross_validation(
     seed: int,
     fold: Optional[int] = None,
     output_dir: Optional[str] = None,
-    max_iter: int = 100
+    max_iter: int = 100,
+    extra_metrics: bool = False,
 ):
     """
     Run Leave-One-Signer-Out cross-validation for fair comparison with Smart Head.
@@ -884,7 +948,7 @@ def run_loso_cross_validation(
         fold_result = evaluate_single_fold(
             fold_idx, train_embeddings, train_labels,
             test_embeddings, test_labels, test_signer,
-            method, seed, max_iter
+            method, seed, max_iter, extra_metrics
         )
         
         all_results.append(fold_result)
@@ -911,6 +975,21 @@ def run_loso_cross_validation(
         std_r5 = np.std([r['r@5'] for r in all_results])
         std_r10 = np.std([r['r@10'] for r in all_results])
         std_median_rank = np.std([r['median_rank'] for r in all_results])
+
+        if extra_metrics:
+            avg_precision_macro = np.mean([r['precision_macro'] for r in all_results])
+            avg_recall_macro = np.mean([r['recall_macro'] for r in all_results])
+            avg_f1_macro = np.mean([r['f1_macro'] for r in all_results])
+            avg_precision_weighted = np.mean([r['precision_weighted'] for r in all_results])
+            avg_recall_weighted = np.mean([r['recall_weighted'] for r in all_results])
+            avg_f1_weighted = np.mean([r['f1_weighted'] for r in all_results])
+
+            std_precision_macro = np.std([r['precision_macro'] for r in all_results])
+            std_recall_macro = np.std([r['recall_macro'] for r in all_results])
+            std_f1_macro = np.std([r['f1_macro'] for r in all_results])
+            std_precision_weighted = np.std([r['precision_weighted'] for r in all_results])
+            std_recall_weighted = np.std([r['recall_weighted'] for r in all_results])
+            std_f1_weighted = np.std([r['f1_weighted'] for r in all_results])
         
         print(f"\n{'='*60}")
         print(f"Average Across All Folds")
@@ -919,6 +998,13 @@ def run_loso_cross_validation(
         print(f"  R@5↑:        {avg_r5:.4f} ± {std_r5:.4f}")
         print(f"  R@10↑:       {avg_r10:.4f} ± {std_r10:.4f}")
         print(f"  MedianR↓:    {avg_median_rank:.2f} ± {std_median_rank:.2f}")
+        if extra_metrics:
+            print(f"  Precision (class-mean/macro):   {avg_precision_macro:.4f} ± {std_precision_macro:.4f}")
+            print(f"  Recall (class-mean/macro):      {avg_recall_macro:.4f} ± {std_recall_macro:.4f}")
+            print(f"  F1 (class-mean/macro):          {avg_f1_macro:.4f} ± {std_f1_macro:.4f}")
+            print(f"  Precision (weighted):{avg_precision_weighted:.4f} ± {std_precision_weighted:.4f}")
+            print(f"  Recall (weighted):   {avg_recall_weighted:.4f} ± {std_recall_weighted:.4f}")
+            print(f"  F1 (weighted):       {avg_f1_weighted:.4f} ± {std_f1_weighted:.4f}")
         print(f"{'='*60}\n")
         
         # Save results
@@ -927,30 +1013,47 @@ def run_loso_cross_validation(
             output_path.mkdir(parents=True, exist_ok=True)
             
             results_file = output_path / f'loso_{method}_results.csv'
+            fold_fieldnames = [
+                'fold', 'test_signer', 'r@1', 'r@5', 'r@10', 'median_rank',
+                'hit_1', 'hit_5', 'hit_10', 'num_test', 'num_train', 'num_classes'
+            ]
+            if extra_metrics:
+                fold_fieldnames.extend([
+                    'precision_macro', 'recall_macro', 'f1_macro',
+                    'precision_weighted', 'recall_weighted', 'f1_weighted'
+                ])
             with open(results_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(
                     f,
-                    fieldnames=[
-                        'fold', 'test_signer', 'r@1', 'r@5', 'r@10', 'median_rank',
-                        'hit_1', 'hit_5', 'hit_10', 'num_test', 'num_train', 'num_classes'
-                    ]
+                    fieldnames=fold_fieldnames
                 )
                 writer.writeheader()
                 for row in all_results:
                     writer.writerow(row)
 
             summary_file = output_path / f'loso_{method}_summary.csv'
+            summary_fieldnames = [
+                'method', 'pose_embeddings_dir', 'label_language', 'use_categories', 'seed',
+                'r@1_mean', 'r@1_std', 'r@5_mean', 'r@5_std',
+                'r@10_mean', 'r@10_std', 'median_rank_mean', 'median_rank_std'
+            ]
+            if extra_metrics:
+                summary_fieldnames.extend([
+                    'precision_macro_mean', 'precision_macro_std',
+                    'recall_macro_mean', 'recall_macro_std',
+                    'f1_macro_mean', 'f1_macro_std',
+                    'precision_weighted_mean', 'precision_weighted_std',
+                    'recall_weighted_mean', 'recall_weighted_std',
+                    'f1_weighted_mean', 'f1_weighted_std'
+                ])
+
             with open(summary_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(
                     f,
-                    fieldnames=[
-                        'method', 'pose_embeddings_dir', 'label_language', 'use_categories', 'seed',
-                        'r@1_mean', 'r@1_std', 'r@5_mean', 'r@5_std',
-                        'r@10_mean', 'r@10_std', 'median_rank_mean', 'median_rank_std'
-                    ]
+                    fieldnames=summary_fieldnames
                 )
                 writer.writeheader()
-                writer.writerow({
+                summary_row = {
                     'method': method,
                     'pose_embeddings_dir': pose_embeddings_dir,
                     'label_language': label_language,
@@ -964,7 +1067,23 @@ def run_loso_cross_validation(
                     'r@10_std': std_r10,
                     'median_rank_mean': avg_median_rank,
                     'median_rank_std': std_median_rank,
-                })
+                }
+                if extra_metrics:
+                    summary_row.update({
+                        'precision_macro_mean': avg_precision_macro,
+                        'precision_macro_std': std_precision_macro,
+                        'recall_macro_mean': avg_recall_macro,
+                        'recall_macro_std': std_recall_macro,
+                        'f1_macro_mean': avg_f1_macro,
+                        'f1_macro_std': std_f1_macro,
+                        'precision_weighted_mean': avg_precision_weighted,
+                        'precision_weighted_std': std_precision_weighted,
+                        'recall_weighted_mean': avg_recall_weighted,
+                        'recall_weighted_std': std_recall_weighted,
+                        'f1_weighted_mean': avg_f1_weighted,
+                        'f1_weighted_std': std_f1_weighted,
+                    })
+                writer.writerow(summary_row)
             
             print(f"Results saved to {results_file}")
             print(f"Summary saved to {summary_file}\n")
@@ -1053,6 +1172,8 @@ Methods:
                         help='Maximum iterations for linear_probe, svm, and mlp (default: 100).')
     parser.add_argument('--class_eval', action='store_true',
                         help='Print per-class retrieval metrics and save per-class metrics to CSV (standard mode only).')
+    parser.add_argument('--extra_metrics', action='store_true',
+                        help='Compute and print classification metrics from top-1 predictions: precision/recall/F1 (macro and weighted).')
         
     args = parser.parse_args()
 
@@ -1071,6 +1192,7 @@ Methods:
             fold=args.fold,
             output_dir=args.output_dir,
             max_iter=args.max_iter,
+            extra_metrics=args.extra_metrics,
         )
     else:
         # Run standard signer-independent evaluation
@@ -1087,6 +1209,7 @@ Methods:
             output_dir=args.output_dir,
             max_iter=args.max_iter,
             class_eval=args.class_eval,
+            extra_metrics=args.extra_metrics,
         )
 
 

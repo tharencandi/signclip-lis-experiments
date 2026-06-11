@@ -137,6 +137,7 @@ class fineTuneSignIT(RetriTask):
         self.aug_sigma_noise = self._cfg_float(config.dataset, 'aug_sigma_noise', 0.001)
         self.aug_p_flip = self._cfg_float(config.dataset, 'aug_p_flip', 0.2)
         self.aug_strength_max = self._cfg_float(config.dataset, 'aug_strength_max', 3.0)
+        self.use_augmentation = bool(getattr(config.dataset, 'augment_temporal', True))
 
         self.train_data = DataLoader(
             self.train_dataset,
@@ -320,7 +321,7 @@ class fineTuneSignIT(RetriTask):
         return avg_loss, r1, r5, r10, medianK
 
     def train_pose_collate_fn(self, batch):
-        return self.pose_collate_fn(batch, augment=True)
+        return self.pose_collate_fn(batch, augment=self.use_augmentation)
 
     def val_pose_collate_fn(self, batch):
         return self.pose_collate_fn(batch, augment=False)
