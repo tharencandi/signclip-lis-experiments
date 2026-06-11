@@ -18,13 +18,14 @@ dataset:
   vfeat_dir: /content/signclip-lis-experiments/runs/signclip_signit_finetune
   aligner: DSAligner
   pose_components: 'reduced_face'
-  augment_temporal: false
-  # Current active regime: weighted sampling only, no augmentation.
-  aug_sigma_temporal: 0.0
-  aug_sigma_spatial: 0.0
-  aug_sigma_noise: 0.0
-  aug_p_flip: 0.0
-  aug_strength_max: 1.0
+  augment_temporal: true
+  use_weighted_sampler: false
+  # Current active regime: v2 augmentation with default batch sampling.
+  aug_sigma_temporal: 0.3
+  aug_sigma_spatial: 0.3
+  aug_sigma_noise: 0.002
+  aug_p_flip: 0.4
+  aug_strength_max: 5.0
 
   # Saved experiment history for reproducibility.
   aug_regime_notes:
@@ -86,12 +87,22 @@ dataset:
       note: transfer-recovery regime (lighter regularization, epoch-wise checkpoint sweep)
     v6:
       augment_temporal: false
+      use_weighted_sampler: true
       aug_sigma_temporal: 0.0
       aug_sigma_spatial: 0.0
       aug_sigma_noise: 0.0
       aug_p_flip: 0.0
       aug_strength_max: 1.0
       note: weighted sampling only, no augmentation
+    v7:
+      augment_temporal: true
+      use_weighted_sampler: false
+      aug_sigma_temporal: 0.3
+      aug_sigma_spatial: 0.3
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.4
+      aug_strength_max: 5.0
+      note: v2 augmentation with default batch sampling (non-weighted)
 fairseq:
   common:
     fp16: true

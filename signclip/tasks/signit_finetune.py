@@ -115,11 +115,14 @@ class fineTuneSignIT(RetriTask):
         self.mean_label_count = float(sum(self.label_counts.values())) / float(len(self.label_counts))
 
         sample_weights = self._compute_sample_weights(self.train_dataset, self.label_counts)
-        train_sampler = WeightedRandomSampler(
-            weights=sample_weights,
-            num_samples=len(sample_weights),
-            replacement=True,
-        )
+        self.use_weighted_sampler = bool(getattr(config.dataset, 'use_weighted_sampler', True))
+        train_sampler = None
+        if self.use_weighted_sampler:
+            train_sampler = WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=len(sample_weights),
+                replacement=True,
+            )
 
         min_count = min(self.label_counts.values())
         max_count = max(self.label_counts.values())
@@ -143,6 +146,7 @@ class fineTuneSignIT(RetriTask):
             self.train_dataset,
             batch_size=batch_size,
             sampler=train_sampler,
+            shuffle=not self.use_weighted_sampler,
             collate_fn=self.train_pose_collate_fn,
             num_workers=num_workers,
             drop_last=False,
