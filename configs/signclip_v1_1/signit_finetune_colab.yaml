@@ -20,12 +20,12 @@ dataset:
   pose_components: 'reduced_face'
   augment_temporal: true
   use_weighted_sampler: false
-  # Current active regime: v2 augmentation with default batch sampling.
-  aug_sigma_temporal: 0.3
-  aug_sigma_spatial: 0.3
+  # Current active regime: v8 - strict spatial augmentation (preserve LIS grammar)
+  aug_sigma_temporal: 0.25
+  aug_sigma_spatial: 0.15
   aug_sigma_noise: 0.002
-  aug_p_flip: 0.4
-  aug_strength_max: 5.0
+  aug_p_flip: 0.0
+  aug_strength_max: 3.5
 
   # Saved experiment history for reproducibility.
   aug_regime_notes:
@@ -103,6 +103,15 @@ dataset:
       aug_p_flip: 0.4
       aug_strength_max: 5.0
       note: v2 augmentation with default batch sampling (non-weighted). Best loss checkpoint is new best balanced model. Zero-shot R@1 14.87%, linear R@1 16.41%, beating original (13.85/15.38) on both metrics.
+    v8_strict_spatial:
+      augment_temporal: true
+      use_weighted_sampler: false
+      aug_sigma_temporal: 0.25
+      aug_sigma_spatial: 0.15
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.0
+      aug_strength_max: 3.5
+      note: Conservative spatial augmentation - preserve LIS spatial grammar. Reduce hand cropping, eliminate horizontal flip, keep helpful temporal jitter.
 fairseq:
   common:
     fp16: true
