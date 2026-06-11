@@ -56,6 +56,7 @@ import statistics
 from typing import Optional
 from tqdm import tqdm
 from datetime import datetime
+from sklearn.metrics import precision_recall_fscore_support
 
 try:
     import matplotlib.pyplot as plt
@@ -387,7 +388,8 @@ def evaluate_zero_shot(
     label_type: str = 'micro',
     use_categories: bool = False,
     output_dir: Optional[str] = None,
-    class_eval: bool = False
+    class_eval: bool = False,
+    extra_metrics: bool = False
 ):
     """
     Perform zero-shot evaluation using precomputed embeddings.
@@ -516,6 +518,7 @@ def evaluate_zero_shot(
     hit_5 = 0
     hit_10 = 0
     ranks = []
+    predictions = []  # For classification metrics
 
     category_stats = {}
     signer_stats = {}
@@ -540,6 +543,7 @@ def evaluate_zero_shot(
             class_stats[gold_label]['total'] += 1
 
         ranked_labels = [text_labels[idx] for idx in ranked_indices[i]]
+        predictions.append(ranked_labels[0])  # Top-1 prediction
         
         if gold_label in ranked_labels[:1]:
             hit_1 += 1
@@ -604,6 +608,21 @@ def evaluate_zero_shot(
     print(f"  MedianR↓:     {median_rank:>7.1f}")
     print(f"\nAccuracy:")
     print(f"  Top-1:        {recall_1:>7.2%}  ({hit_1:>5}/{num_test})")
+    
+    if extra_metrics:
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
+            pose_labels, predictions, average='macro', zero_division=0
+        )
+        precision_weighted, recall_weighted, f1_weighted, _ = precision_recall_fscore_support(
+            pose_labels, predictions, average='weighted', zero_division=0
+        )
+        print(f"\nClassification Metrics:")
+        print(f"  Precision (class-mean/macro):   {precision_macro:>7.4f}")
+        print(f"  Recall (class-mean/macro):      {recall_macro:>7.4f}")
+        print(f"  F1 (class-mean/macro):          {f1_macro:>7.4f}")
+        print(f"  Precision (weighted):           {precision_weighted:>7.4f}")
+        print(f"  Recall (weighted):              {recall_weighted:>7.4f}")
+        print(f"  F1 (weighted):                  {f1_weighted:>7.4f}")
 
     if not legacy_format and not use_categories:
         print(f"\n{'='*75}")
@@ -941,6 +960,8 @@ Available prompt types:
                         help='Output directory for results CSV (default: runs/zero_shot)')
     parser.add_argument('--class_eval', action='store_true',
                         help='Print per-class retrieval metrics and save per-class metrics to CSV')
+    parser.add_argument('--extra_metrics', action='store_true',
+                        help='Compute and print classification metrics (precision/recall/F1)')
     
     args = parser.parse_args()
     
@@ -957,7 +978,8 @@ Available prompt types:
         label_type=args.label_type,
         use_categories=args.use_categories,
         output_dir=args.output_dir,
-        class_eval=args.class_eval
+        class_eval=args.class_eval,
+        extra_metrics=args.extra_metrics
     )
 
 
