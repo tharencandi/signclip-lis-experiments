@@ -42,7 +42,7 @@ dataset:
       aug_sigma_noise: 0.002
       aug_p_flip: 0.4
       aug_strength_max: 5.0
-      note: still overfitting
+      note: still overfitting. Zero-shot specialist - R@1 15.38%, Linear R@1 13.33%
     v3:
       aug_sigma_temporal: 0.5
       aug_sigma_spatial: 0.5
@@ -93,7 +93,7 @@ dataset:
       aug_sigma_noise: 0.0
       aug_p_flip: 0.0
       aug_strength_max: 1.0
-      note: weighted sampling only, no augmentation
+      note: weighted sampling only, no augmentation. Linear probe specialist - R@1 16.92%, but hurts zero-shot (R@1 11.28%)
     v7:
       augment_temporal: true
       use_weighted_sampler: false
@@ -102,7 +102,7 @@ dataset:
       aug_sigma_noise: 0.002
       aug_p_flip: 0.4
       aug_strength_max: 5.0
-      note: v2 augmentation with default batch sampling (non-weighted)
+      note: v2 augmentation with default batch sampling (non-weighted). Best loss checkpoint is new best balanced model. Zero-shot R@1 14.87%, linear R@1 16.41%, beating original (13.85/15.38) on both metrics.
 fairseq:
   common:
     fp16: true
