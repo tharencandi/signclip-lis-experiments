@@ -1,95 +1,89 @@
-# SignCLIP Experiments
+# SignCLIP LIS Experiments
 
-Extracted from J22Medoly/fairseq
+Evaluation of [SignCLIP](https://arxiv.org/abs/2407.10925) on Italian Sign Language (LIS) across zero-shot, few-shot, and fine-tuning paradigms. Datasets: **A3LIS-147** (balanced, lab-recorded) and **SignIT** (naturalistic, long-tailed). Adapted from the original MMPT/fairseq implementation with fairseq dependencies removed.
 
-## Directory Structure
+## Structure
+
 ```
 signclip-lis-experiments/
-├── signclip/              # Core package (no fairseq deps!)
-│   ├── models/            # Model architectures
-│   ├── tasks/             # Training tasks
-│   ├── processors/        # Data processors
-│   ├── datasets/          # Dataset classes
-│   ├── evaluators/        # Evaluation metrics
-│   ├── losses/            # Loss functions
-│   ├── modules/           # Model modules
-│   └── utils/             # Utilities
-├── configs/               # Model configs (all variants)
-├── scripts/               # Your training/eval scripts
-├── upstream_reference/    # Original SignCLIP scripts (reference only)
-│   ├── demos/             # Original demo scripts
-│   ├── tests/             # Original test scripts  
-│   └── analysis/          # Original results/analysis scripts
-├── pretrained_models/     # Downloaded checkpoint weights
-├── tests/                 # Your test suite
-├── environment.yml        # Conda environment
-└── requirements.txt       # Pip dependencies
+├── signclip/                  # Core package (no fairseq deps)
+├── configs/                   # Model configs (signclip_v1_1, ablations, ...)
+├── dataset/
+│   ├── embeddings/            # Precomputed .npy pose embeddings by model variant
+│   ├── A3LIS_dataset_poses/
+│   └── SignIT_dataset_poses/
+├── src/                       # Evaluation and analysis scripts
+│   ├── few_shot.py            # linear-probe etc 
+│   ├── zero_shot.py           # Zero-shot video-text retrieval
+│   ├── precompute_embeddings.py 
+├── scripts/                   # Training / batch eval shell scripts
+├── runs/                      # Experiment outputs and CSVs
+├── pretrained_models/         # Checkpoint weights
+├── docs/                      # Report (Typst)
+├── environment.yml
+└── requirements.txt
 ```
 
 ## Installation
 
-### Local Install
 ```bash
+conda env create -f environment.yml
+conda activate signclip
 pip install -e .
+python setup_local_config.py   # creates required dirs and local config
 ```
 
-## Colab Setup w/ Konda
-```
-!pip install konda
-import konda; konda.install()
+## Key Workflows
 
-!git clone https://github.com/yourusername/signclip-experiments.git
-%cd signclip-experiments
-
-!konda env create -f environment.yml -n signclip -y
-!konda activate signclip
-
-# Install package in dev mode
-!konda run "pip install -e ."
+**1. Precompute embeddings**
+```bash
+python src/precompute_embeddings.py \
+  --config configs/signclip_v1_1/baseline_temporal.yaml \
+  --pose_dir dataset/A3LIS_dataset_poses \
+  --output_dir dataset/embeddings/a3lis_baseline
 ```
 
-## Quick Start
-
-Inference
-```python 
-from signclip.models import MMPTModel
-
-# Load pretrained model
-model, tokenizer, aligner = MMPTModel.from_pretrained(
-    "configs/signclip_v1_1/baseline_temporal.yaml"
-)
-
-# Run inference on pose file
-embeddings = model.embed_pose("path/to/sign.pose")
+**2. Few-shot evaluation** (prototypical / linear-probe / KNN)
+```bash
+python src/few_shot.py \
+  --pose_embeddings_dir dataset/embeddings/a3lis_baseline \
+  --method prototypical --label_language english
 ```
 
-fine-tuning
-```python
-from signclip.models import MMPTModel
-from scripts.train_simple import simple_train
-
-# Load pretrained
-model, tokenizer, aligner = MMPTModel.from_pretrained("configs/signclip_v1_1/...")
-
-# Your data
-train_loader = DataLoader(your_dataset, batch_size=32)
-
-# Train
-simple_train(model, train_loader, epochs=10, lr=5e-5)
+**3. Zero-shot retrieval**
+```bash
+python src/zero_shot.py \
+  --pose_embeddings_dir dataset/embeddings/a3lis_baseline \
+  --label_language english
 ```
 
-## Upstream Reference Scripts
+## Fine-tuning
 
-The `upstream_reference/` folder contains **original scripts from the SignCLIP authors** for reference purposes. These include additional demos, tests, and analysis scripts from the paper. See [upstream_reference/README.md](upstream_reference/README.md) for details.
+Loss functions evaluated: InfoNCE, SupCon, Cross-Entropy, DHN-NCE, **GlobalNCE** (best), **ProLIP** (parameter-efficient). All configs are in `configs/`.
 
-⚠️ These are provided as-is from the original fairseq/MMPT implementation and may have additional dependencies.
+**A3LIS**
+```bash
+python scripts/run_finetune.py --config configs/signclip_v1_1/a3lis_finetune.yaml
+```
 
-## Citation
-    title = "{S}ign{CLIP}: Connecting Text and Sign Language by Contrastive Learning",
-    author = {Jiang, Zifan and Sant, Gerard and Moryossef, Amit and 
-              M{\"u}ller, Mathias and Sennrich, Rico and Ebling, Sarah},
-    booktitle = "Proceedings of EMNLP 2024",
-    year = "2024",
+**SignIT**
+```bash
+python scripts/run_signit_finetune.py --config configs/signclip_v1_1/signit_finetune.yaml
+```
+
+Results are written to `runs/`.
+
+## Reference
+
+This project builds on SignCLIP. Please cite the original work:
+
+```bibtex
+@inproceedings{jiang2024signclip,
+  title     = {{S}ign{CLIP}: Connecting Text and Sign Language by Contrastive Learning},
+  author    = {Jiang, Zifan and Sant, Gerard and Moryossef, Amit and
+               M{\"u}ller, Mathias and Sennrich, Rico and Ebling, Sarah},
+  booktitle = {Proceedings of EMNLP 2024},
+  year      = {2024},
 }
-MIT License (adapted from original MMPT/fairseq)
+```
 
