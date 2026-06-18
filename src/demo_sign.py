@@ -26,6 +26,7 @@ except ImportError:
 import argparse
 import torch
 import numpy as np
+from typing import Optional
 from pose_format import Pose
 from signclip.models import MMPTModel
 from signclip.utils.pose_utils import (
@@ -54,14 +55,16 @@ A3LIS_FINETUNE_BASE_CONFIG = "signclip_v1_1/baseline_temporal"
 # Cache for models that have been lazily initialized.
 models = {}
 
-def get_model(model_name):
+
+def get_model(model_name, checkpoint_path: Optional[str] = None):
     """
     Lazily load the requested model based on model_name.
     If the model is already loaded, return it.
     Otherwise, find its config, load it, and cache it.
     """
-    if model_name in models:
-        return models[model_name]
+    cache_key = (model_name, str(Path(checkpoint_path).resolve()) if checkpoint_path else None)
+    if cache_key in models:
+        return models[cache_key]
 
     # Look up the configuration for the given model_name.
     config_path = None
@@ -74,16 +77,18 @@ def get_model(model_name):
     if not found:
         raise ValueError(f"Unknown model name: {model_name}")
 
-    if model_name == 'a3lis_finetune':
-        # Load base architecture (same as 'default') then overlay fine-tuned weights.
-        ckpt_path = Path(A3LIS_FINETUNE_CHECKPOINT)
+    if checkpoint_path is not None or model_name == 'a3lis_finetune':
+        # Load a base architecture and optionally overlay a checkpoint.
+        ckpt_path = Path(checkpoint_path) if checkpoint_path else Path(A3LIS_FINETUNE_CHECKPOINT)
         if not ckpt_path.exists():
             raise FileNotFoundError(
-                f"Fine-tuned A3LIS checkpoint not found: {ckpt_path}\n"
+                f"Checkpoint not found: {ckpt_path}\n"
                 f"Run scripts/run_finetune.py first to produce the checkpoint."
             )
+
+        base_config = config_path if config_path is not None else A3LIS_FINETUNE_BASE_CONFIG
         model, tokenizer, aligner = MMPTModel.from_pretrained(
-            f"projects/retri/{A3LIS_FINETUNE_BASE_CONFIG}.yaml",
+            f"projects/retri/{base_config}.yaml",
             video_encoder=None,
         )
         state = torch.load(ckpt_path, map_location='cpu', weights_only=False)
@@ -95,7 +100,7 @@ def get_model(model_name):
             sd = {f'model.{k}': v for k, v in sd.items()}
         missing, unexpected = model.load_state_dict(sd, strict=False)
         if missing:
-            print(f"[a3lis_finetune] Warning: {len(missing)} missing keys in checkpoint")
+            print(f"[{model_name}] Warning: {len(missing)} missing keys in checkpoint")
     else:
         # Standard YAML-based model loading.
         model, tokenizer, aligner = MMPTModel.from_pretrained(
@@ -108,16 +113,16 @@ def get_model(model_name):
     if torch.cuda.is_available():
         model.cuda()
 
-    models[model_name] = {
+    models[cache_key] = {
         "model": model,
         "tokenizer": tokenizer,
         "aligner": aligner,
     }
-    return models[model_name]
+    return models[cache_key]
 
 
-def preprocess_text(text, model_name="default"):
-    model_info = get_model(model_name)
+def preprocess_text(text, model_name="default", checkpoint_path: Optional[str] = None):
+    model_info = get_model(model_name, checkpoint_path=checkpoint_path)
     aligner = model_info["aligner"]
     tokenizer = model_info["tokenizer"]
 
@@ -129,11 +134,11 @@ def preprocess_text(text, model_name="default"):
     return caps, cmasks
 
 
-def embed_pose(pose, model_name='default'):
-    model_info = get_model(model_name)
+def embed_pose(pose, model_name='default', checkpoint_path: Optional[str] = None):
+    model_info = get_model(model_name, checkpoint_path=checkpoint_path)
     model = model_info['model']
 
-    caps, cmasks = preprocess_text('', model_name)
+    caps, cmasks = preprocess_text('', model_name, checkpoint_path=checkpoint_path)
     poses = pose if type(pose) == list else [pose]
     embeddings = []
 
@@ -172,8 +177,8 @@ def embed_pose(pose, model_name='default'):
     return np.concatenate(embeddings)
 
 
-def embed_text(text, model_name='default'):
-    model_info = get_model(model_name)
+def embed_text(text, model_name='default', checkpoint_path: Optional[str] = None):
+    model_info = get_model(model_name, checkpoint_path=checkpoint_path)
     model = model_info['model']
     
     # Determine the placeholder dimension based on the model_name.
@@ -192,7 +197,7 @@ def embed_text(text, model_name='default'):
     caps_list = []
     cmasks_list = []
     for t in texts:
-        caps, cmasks = preprocess_text(t, model_name)
+        caps, cmasks = preprocess_text(t, model_name, checkpoint_path=checkpoint_path)
         caps_list.append(caps)   # Each should have shape (1, 128)
         cmasks_list.append(cmasks)
 
@@ -212,12 +217,12 @@ def embed_text(text, model_name='default'):
     return embeddings
 
 
-def score_pose_and_text(pose, text, model_name="default", max_frames=None):
-    model_info = get_model(model_name)
+def score_pose_and_text(pose, text, model_name="default", max_frames=None, checkpoint_path: Optional[str] = None):
+    model_info = get_model(model_name, checkpoint_path=checkpoint_path)
     model = model_info["model"]
 
     pose_frames = preprocess_pose(pose, max_frames)
-    caps, cmasks = preprocess_text(text, model_name)
+    caps, cmasks = preprocess_text(text, model_name, checkpoint_path=checkpoint_path)
 
     with torch.no_grad():
         output = model(pose_frames, caps, cmasks, return_score=True)
@@ -225,9 +230,9 @@ def score_pose_and_text(pose, text, model_name="default", max_frames=None):
     return text, float(output["score"])  # dot-product
 
 
-def score_pose_and_text_batch(pose, text, model_name='default'):
-    pose_embedding = embed_pose(pose, model_name)
-    text_embedding = embed_text(text, model_name)
+def score_pose_and_text_batch(pose, text, model_name='default', checkpoint_path: Optional[str] = None):
+    pose_embedding = embed_pose(pose, model_name, checkpoint_path=checkpoint_path)
+    text_embedding = embed_text(text, model_name, checkpoint_path=checkpoint_path)
 
     scores = np.matmul(pose_embedding, text_embedding.T)
     return scores
@@ -235,6 +240,19 @@ def score_pose_and_text_batch(pose, text, model_name='default'):
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate pose and text similarity using SignCLIP.")
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="default",
+        choices=[name for name, _ in model_configs],
+        help="Base model architecture to use for text/video embedding.",
+    )
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Optional checkpoint to overlay on top of the selected model architecture.",
+    )
     parser.add_argument(
         "--pose_path",
         default="./house.pose",
@@ -254,6 +272,8 @@ def main():
 
     pose_path = args.pose_path
     max_frames = args.max_frames
+    model_name = args.model_name
+    checkpoint_path = args.checkpoint_path
 
     if not pose_path.is_file():
         print(f"Error: File {pose_path} does not exist.")
@@ -263,20 +283,20 @@ def main():
         buffer = f.read()
         pose = Pose.read(buffer)
 
-        print(score_pose_and_text(pose, "random text", max_frames=max_frames))
-        print(score_pose_and_text(pose, "house", max_frames=max_frames))
-        print(score_pose_and_text(pose, "<en> <ase> house", max_frames=max_frames))
-        print(score_pose_and_text(pose, "<en> <gsg> house", max_frames=max_frames))
-        print(score_pose_and_text(pose, "<en> <fsl> house", max_frames=max_frames))
-        print(score_pose_and_text(pose, "<en> <ase> sun", max_frames=max_frames))
-        print(score_pose_and_text(pose, "<en> <ase> police", max_frames=max_frames))
-        print(score_pose_and_text(pose, "<en> <ase> how are you?", max_frames=max_frames))
+        print(score_pose_and_text(pose, "random text", model_name=model_name, max_frames=max_frames, checkpoint_path=checkpoint_path))
+        print(score_pose_and_text(pose, "house", model_name=model_name, max_frames=max_frames, checkpoint_path=checkpoint_path))
+        print(score_pose_and_text(pose, "<en> <ase> house", model_name=model_name, max_frames=max_frames, checkpoint_path=checkpoint_path))
+        print(score_pose_and_text(pose, "<en> <gsg> house", model_name=model_name, max_frames=max_frames, checkpoint_path=checkpoint_path))
+        print(score_pose_and_text(pose, "<en> <fsl> house", model_name=model_name, max_frames=max_frames, checkpoint_path=checkpoint_path))
+        print(score_pose_and_text(pose, "<en> <ase> sun", model_name=model_name, max_frames=max_frames, checkpoint_path=checkpoint_path))
+        print(score_pose_and_text(pose, "<en> <ase> police", model_name=model_name, max_frames=max_frames, checkpoint_path=checkpoint_path))
+        print(score_pose_and_text(pose, "<en> <ase> how are you?", model_name=model_name, max_frames=max_frames, checkpoint_path=checkpoint_path))
 
         text_l = ["<en> <ase> house", "<en> <ase> police"]
         pose_l = [pose, pose]
-        print(score_pose_and_text_batch(pose_l, text_l))
+        print(score_pose_and_text_batch(pose_l, text_l, model_name=model_name, checkpoint_path=checkpoint_path))
         
-        print(score_pose_and_text_batch(pose_l, text_l, model_name='asl_finetune'))
+        print(score_pose_and_text_batch(pose_l, text_l, model_name='asl_finetune', checkpoint_path=checkpoint_path))
 
 
 if __name__ == "__main__":

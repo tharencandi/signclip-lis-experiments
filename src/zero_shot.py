@@ -49,11 +49,19 @@ Prompt Types:
 import argparse
 import sys
 import json
+import csv
 from pathlib import Path
 import numpy as np
 import statistics
+from typing import Optional
 from tqdm import tqdm
 from datetime import datetime
+from sklearn.metrics import precision_recall_fscore_support
+
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
 
 # Add project root to path for demo_sign import
 project_root = Path(__file__).parent.parent
@@ -61,15 +69,149 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.demo_sign import embed_text
-from src.embedding_utils import load_a3lis_embeddings
+from src.embedding_utils import PROMPT_TEMPLATES
 
 
-# Predefined text prompt templates for prompt engineering experiments
-PROMPT_TEMPLATES = {
-    'raw': '{}',                          # Raw gloss (no template)
-    'it_lis': '<it> <lis> {}',            # Italian language tag
-    'en_lis': '<en> <lis> {}',            # English language tag (paper standard)
-}
+def compute_cmc_curve(ranks, num_classes):
+    """
+    Compute CMC values where x-axis is rank (1..num_classes) and y-axis is accuracy.
+
+    Args:
+        ranks: List of zero-indexed ranks for each sample
+        num_classes: Number of candidate text classes
+
+    Returns:
+        Tuple (ranks_1_indexed, cmc_values)
+    """
+    if num_classes <= 0:
+        return [], []
+
+    ranks_arr = np.array(ranks, dtype=np.int32)
+    x_ranks = np.arange(1, num_classes + 1)
+    cmc_values = []
+
+    for k in x_ranks:
+        # For rank-k retrieval, count samples with rank <= k (convert to 0-index: <= k-1)
+        cmc_values.append(float(np.mean(ranks_arr <= (k - 1))))
+
+    return x_ranks.tolist(), cmc_values
+
+
+def assign_accuracy_tier(recall_at_1):
+    """
+    Map class R@1 to explicit tiers used for structural analysis.
+    """
+    if recall_at_1 > 0.30:
+        return 'High-Performers (>30% R@1)'
+    if recall_at_1 >= 0.01:
+        return 'Traces (1% - 29% R@1)'
+    return 'Zero-Floor (0% R@1)'
+
+
+def assign_retrieval_neighborhood(recall_at_1, recall_at_5, recall_at_10):
+    """
+    Group classes into retrieval neighborhoods:
+    - Hit Neighborhood: class has at least one R@1 success
+    - Near-Miss Neighborhood: no R@1 success, but succeeds at R@5 or R@10
+    - Catastrophic Failure Neighborhood: no success up to R@10
+    """
+    if recall_at_1 > 0.0:
+        return 'Hit Neighborhood (R@1 Success)'
+    if recall_at_5 > 0.0 or recall_at_10 > 0.0:
+        return 'Near-Miss Neighborhood (R@5/R@10 Success)'
+    return 'Catastrophic Failure Neighborhood (0% through R@10)'
+
+
+def create_class_eval_plots(output_dir, split, prompt_name, label_str, class_metrics, cmc_ranks, cmc_values):
+    """
+    Create and save class-eval diagnostic figures:
+    1) CMC curve (Rank vs Accuracy)
+    2) Violin plots of class Median Rank grouped by R@1 tiers
+
+    Returns:
+        Dict with saved plot paths (or empty dict if plotting is unavailable)
+    """
+    if plt is None:
+        print("\nWARNING: matplotlib is not installed; skipping class-eval plots.")
+        return {}
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths = {}
+
+    # Build deterministic filename stem shared by both plots
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    file_stem = f"zero_shot_{split}_{prompt_name}_{label_str}_{timestamp}"
+
+    # Plot 1: CMC curve
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(cmc_ranks, cmc_values, linewidth=2.5, color='#0b84a5')
+    ax.set_title('Cumulative Match Characteristic (CMC) Curve')
+    ax.set_xlabel('Rank')
+    ax.set_ylabel('Accuracy (R@k)')
+    ax.set_xlim(1, max(cmc_ranks) if cmc_ranks else 1)
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(alpha=0.25)
+
+    cmc_file = output_dir / f"{file_stem}_cmc_curve.png"
+    fig.tight_layout()
+    fig.savefig(str(cmc_file), dpi=180)
+    plt.close(fig)
+    saved_paths['cmc_curve'] = str(cmc_file)
+
+    # Plot 2: Violin plot by retrieval neighborhoods
+    neighborhood_order = [
+        'Hit Neighborhood (R@1 Success)',
+        'Near-Miss Neighborhood (R@5/R@10 Success)',
+        'Catastrophic Failure Neighborhood (0% through R@10)'
+    ]
+    neighborhood_to_median_ranks = {name: [] for name in neighborhood_order}
+
+    for cls_data in class_metrics.values():
+        neighborhood = assign_retrieval_neighborhood(
+            cls_data['recall@1'],
+            cls_data['recall@5'],
+            cls_data['recall@10']
+        )
+        neighborhood_to_median_ranks[neighborhood].append(cls_data['median_rank'])
+
+    violin_items = [
+        (name, neighborhood_to_median_ranks[name])
+        for name in neighborhood_order
+        if len(neighborhood_to_median_ranks[name]) > 0
+    ]
+
+    if not violin_items:
+        print("No class-level median-rank data available for violin plot; skipping tier visualization.")
+        return saved_paths
+
+    violin_labels = [name for name, _ in violin_items]
+    violin_data = [values for _, values in violin_items]
+
+    fig, ax = plt.subplots(figsize=(max(11, 3 * len(violin_data)), 6))
+    vp = ax.violinplot(violin_data, showmeans=True, showmedians=True, widths=0.8)
+
+    # Keep line styling explicit; body styling is left default for compatibility.
+    vp['cmeans'].set_color('#1b1b1b')
+    vp['cmedians'].set_color('#d62728')
+    vp['cbars'].set_color('#1b1b1b')
+    vp['cmaxes'].set_color('#1b1b1b')
+    vp['cmins'].set_color('#1b1b1b')
+
+    ax.set_title('Median Rank Distribution by Retrieval Neighborhood')
+    ax.set_xlabel('Class Neighborhood')
+    ax.set_ylabel('Median Rank')
+    ax.set_xticks(range(1, len(violin_labels) + 1))
+    ax.set_xticklabels(violin_labels, rotation=8)
+    ax.grid(axis='y', alpha=0.25)
+
+    violin_file = output_dir / f"{file_stem}_median_rank_tiers_violin.png"
+    fig.tight_layout()
+    fig.savefig(str(violin_file), dpi=180)
+    plt.close(fig)
+    saved_paths['tier_violin'] = str(violin_file)
+
+    return saved_paths
 
 
 def load_a3lis_embeddings(embedding_dir: Path, split: str = 'test', label_language: str = 'english', use_categories: bool = False):
@@ -246,18 +388,19 @@ def load_pose_embeddings_for_split(embedding_dir: Path, split: str = 'test', lab
 
 def evaluate_zero_shot(
     pose_embeddings_dir: str,
-    text_embeddings_path: str = None,
-    text_metadata_path: str = None,
+    text_embeddings_path: Optional[str] = None,
+    text_metadata_path: Optional[str] = None,
     label_language: str = 'english',
     split: str = 'test',
     model_name: str = 'default',
-    text_template: str = None,
-    prompt_type: str = None,
+    text_template: Optional[str] = None,
+    prompt_type: Optional[str] = None,
     legacy_format: bool = False,
     label_type: str = 'micro',
     use_categories: bool = False,
-    output_dir: str = None,
-    class_eval: bool = False
+    output_dir: Optional[str] = None,
+    class_eval: bool = False,
+    extra_metrics: bool = False
 ):
     """
     Perform zero-shot evaluation using precomputed embeddings.
@@ -386,6 +529,7 @@ def evaluate_zero_shot(
     hit_5 = 0
     hit_10 = 0
     ranks = []
+    predictions = []  # For classification metrics
 
     category_stats = {}
     signer_stats = {}
@@ -410,6 +554,7 @@ def evaluate_zero_shot(
             class_stats[gold_label]['total'] += 1
 
         ranked_labels = [text_labels[idx] for idx in ranked_indices[i]]
+        predictions.append(ranked_labels[0])  # Top-1 prediction
         
         if gold_label in ranked_labels[:1]:
             hit_1 += 1
@@ -474,6 +619,21 @@ def evaluate_zero_shot(
     print(f"  MedianR↓:     {median_rank:>7.1f}")
     print(f"\nAccuracy:")
     print(f"  Top-1:        {recall_1:>7.2%}  ({hit_1:>5}/{num_test})")
+    
+    if extra_metrics:
+        precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(
+            pose_labels, predictions, average='macro', zero_division=0
+        )
+        precision_weighted, recall_weighted, f1_weighted, _ = precision_recall_fscore_support(
+            pose_labels, predictions, average='weighted', zero_division=0
+        )
+        print(f"\nClassification Metrics:")
+        print(f"  Precision (class-mean/macro):   {precision_macro:>7.4f}")
+        print(f"  Recall (class-mean/macro):      {recall_macro:>7.4f}")
+        print(f"  F1 (class-mean/macro):          {f1_macro:>7.4f}")
+        print(f"  Precision (weighted):           {precision_weighted:>7.4f}")
+        print(f"  Recall (weighted):              {recall_weighted:>7.4f}")
+        print(f"  F1 (weighted):                  {f1_weighted:>7.4f}")
 
     if not legacy_format and not use_categories:
         print(f"\n{'='*75}")
@@ -532,6 +692,88 @@ def evaluate_zero_shot(
             cls_display = cls[:35]
             print(f"  {cls_display:<35} | {tot:<5} | {r1:>6.1%} | {r5:>6.1%} | {r10:>6.1%} | {med_r:>7.1f}")
 
+        # Additional structure analysis requested for class-level behavior
+        class_metrics = {
+            cls: {
+                'total': stats['total'],
+                'recall@1': stats['hit_1'] / stats['total'],
+                'recall@5': stats['hit_5'] / stats['total'],
+                'recall@10': stats['hit_10'] / stats['total'],
+                'median_rank': (statistics.median(stats['ranks']) + 1) if stats['ranks'] else 0.0,
+            }
+            for cls, stats in sorted(class_stats.items())
+        }
+
+        # CMC: rank-wise retrieval accuracy profile
+        cmc_ranks, cmc_values = compute_cmc_curve(ranks, len(text_labels))
+
+        # Split classes into retrieval neighborhoods and summarize
+        neighborhood_summary = {
+            'Hit Neighborhood (R@1 Success)': {'count': 0, 'classes': []},
+            'Near-Miss Neighborhood (R@5/R@10 Success)': {'count': 0, 'classes': []},
+            'Catastrophic Failure Neighborhood (0% through R@10)': {'count': 0, 'classes': []},
+        }
+        class_clii = {}
+
+        for cls, m in class_metrics.items():
+            neighborhood = assign_retrieval_neighborhood(m['recall@1'], m['recall@5'], m['recall@10'])
+            neighborhood_summary[neighborhood]['count'] += 1
+            neighborhood_summary[neighborhood]['classes'].append(cls)
+
+            # Cross-Lingual Iconicity Index (CLII) = 1 / median_rank
+            median_rank = max(float(m['median_rank']), 1.0)
+            class_clii[cls] = 1.0 / median_rank
+
+        # Rank classes by R@1 and CLII for inspection
+        top_r1_classes = sorted(
+            class_metrics.items(), key=lambda x: (x[1]['recall@1'], x[1]['recall@5']), reverse=True
+        )[:10]
+        top_clii_classes = sorted(class_clii.items(), key=lambda x: x[1], reverse=True)[:10]
+
+        print(f"\n{'='*90}")
+        print("Class-Level Structural Analysis")
+        print(f"{'='*90}")
+        print("Retrieval neighborhood counts:")
+        for neighborhood_name, neighborhood_data in neighborhood_summary.items():
+            print(f"  {neighborhood_name}: {neighborhood_data['count']} classes")
+
+        if cmc_values:
+            print("\nCMC checkpoints:")
+            checkpoints = [1, 5, 10, max(1, len(text_labels) // 2), len(text_labels)]
+            for ck in sorted(set(checkpoints)):
+                idx = min(max(ck - 1, 0), len(cmc_values) - 1)
+                print(f"  Rank-{ck:<4}: {cmc_values[idx]:.2%}")
+
+        print("\nTop classes by R@1 (candidate cross-lingual iconicity winners):")
+        for cls, m in top_r1_classes:
+            print(
+                f"  {cls:<35} R@1={m['recall@1']:.1%} "
+                f"MedianR={m['median_rank']:.1f} CLII={class_clii[cls]:.4f}"
+            )
+
+        print("\nTop classes by CLII (CLII = 1 / Median Rank):")
+        for cls, clii in top_clii_classes:
+            print(f"  {cls:<35} CLII={clii:.4f}")
+
+        # Optional plot export (saved alongside result CSV files)
+        prompt_str_for_plot = prompt_type if prompt_type else ('custom' if text_template else 'raw')
+        label_str_for_plot = 'categories' if use_categories else label_language
+        plot_dir = output_dir if output_dir else 'runs/zero_shot'
+        plot_paths = create_class_eval_plots(
+            output_dir=plot_dir,
+            split=split,
+            prompt_name=prompt_str_for_plot,
+            label_str=label_str_for_plot,
+            class_metrics=class_metrics,
+            cmc_ranks=cmc_ranks,
+            cmc_values=cmc_values
+        )
+
+        if plot_paths:
+            print("\nSaved class-eval plots:")
+            for plot_name, plot_path in plot_paths.items():
+                print(f"  {plot_name}: {plot_path}")
+
     print(f"{'='*75}\n")
     
     # Show some example predictions
@@ -581,11 +823,34 @@ def evaluate_zero_shot(
                 'recall@5': stats['hit_5'] / stats['total'],
                 'recall@10': stats['hit_10'] / stats['total'],
                 'median_rank': (statistics.median(stats['ranks']) + 1) if stats['ranks'] else 0.0,
+                'clii': 1.0 / max((statistics.median(stats['ranks']) + 1) if stats['ranks'] else 1.0, 1.0),
+                'tier': assign_accuracy_tier(stats['hit_1'] / stats['total']),
+                'retrieval_neighborhood': assign_retrieval_neighborhood(
+                    stats['hit_1'] / stats['total'],
+                    stats['hit_5'] / stats['total'],
+                    stats['hit_10'] / stats['total']
+                )
             }
             for cls, stats in sorted(class_stats.items())
         }
+
+        # Persist CMC data and global CLII summary for downstream analysis
+        cmc_ranks, cmc_values = compute_cmc_curve(ranks, len(text_labels))
+        clii_values = [v['clii'] for v in results['class_metrics'].values()]
+
+        results['cmc_curve'] = {
+            'ranks': cmc_ranks,
+            'accuracies': cmc_values
+        }
+        results['clii_summary'] = {
+            'definition': 'CLII = 1 / Median Rank of Zero-Shot Match',
+            'mean': float(np.mean(clii_values)) if clii_values else 0.0,
+            'median': float(np.median(clii_values)) if clii_values else 0.0,
+            'min': float(np.min(clii_values)) if clii_values else 0.0,
+            'max': float(np.max(clii_values)) if clii_values else 0.0,
+        }
     
-    # Save results to JSON if output_dir specified
+    # Save results to CSV if output_dir specified
     if output_dir:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -594,13 +859,54 @@ def evaluate_zero_shot(
         prompt_str = prompt_type if prompt_type else 'custom' if text_template else 'raw'
         label_str = 'categories' if use_categories else label_language
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}.json"
+        filename = f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}.csv"
         
         results_file = output_path / filename
-        with open(results_file, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
+        scalar_results = {
+            key: value for key, value in results.items()
+            if key not in {'class_metrics', 'cmc_curve', 'clii_summary'}
+        }
+        with open(results_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=list(scalar_results.keys()))
+            writer.writeheader()
+            writer.writerow(scalar_results)
         
         print(f"\nResults saved to {results_file}")
+
+        if class_eval and 'class_metrics' in results:
+            class_metrics_file = output_path / f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}_class_metrics.csv"
+            with open(class_metrics_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        'class_label', 'total', 'recall@1', 'recall@5', 'recall@10',
+                        'median_rank', 'clii', 'tier', 'retrieval_neighborhood'
+                    ]
+                )
+                writer.writeheader()
+                for class_label, metrics in results['class_metrics'].items():
+                    writer.writerow({'class_label': class_label, **metrics})
+            print(f"Class metrics saved to {class_metrics_file}")
+
+        if class_eval and 'cmc_curve' in results:
+            cmc_file = output_path / f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}_cmc_curve.csv"
+            with open(cmc_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=['rank', 'accuracy'])
+                writer.writeheader()
+                for rank, accuracy_value in zip(results['cmc_curve']['ranks'], results['cmc_curve']['accuracies']):
+                    writer.writerow({'rank': rank, 'accuracy': accuracy_value})
+            print(f"CMC data saved to {cmc_file}")
+
+        if class_eval and 'clii_summary' in results:
+            clii_file = output_path / f"zero_shot_{split}_{prompt_str}_{label_str}_{timestamp}_clii_summary.csv"
+            with open(clii_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=['definition', 'mean', 'median', 'min', 'max']
+                )
+                writer.writeheader()
+                writer.writerow(results['clii_summary'])
+            print(f"CLII summary saved to {clii_file}")
     
     return results
 
@@ -662,9 +968,11 @@ Available prompt types:
                         choices=['micro', 'macro'],
                         help='Label granularity (legacy format only)')
     parser.add_argument('--output_dir', type=str, default='runs/zero_shot',
-                        help='Output directory for results JSON (default: runs/zero_shot)')
+                        help='Output directory for results CSV (default: runs/zero_shot)')
     parser.add_argument('--class_eval', action='store_true',
-                        help='Print per-class retrieval metrics and save per-class metrics to JSON')
+                        help='Print per-class retrieval metrics and save per-class metrics to CSV')
+    parser.add_argument('--extra_metrics', action='store_true',
+                        help='Compute and print classification metrics (precision/recall/F1)')
     
     args = parser.parse_args()
     
@@ -681,7 +989,8 @@ Available prompt types:
         label_type=args.label_type,
         use_categories=args.use_categories,
         output_dir=args.output_dir,
-        class_eval=args.class_eval
+        class_eval=args.class_eval,
+        extra_metrics=args.extra_metrics
     )
 
 

@@ -11,6 +11,16 @@ import numpy as np
 from tqdm import tqdm
 
 
+# Shared text prompt templates for embedding-based evaluation scripts.
+PROMPT_TEMPLATES = {
+    'raw': '{}',
+    'it_lis': '<it> <lis> {}',
+    'en_lis': '<en> <lis> {}',
+}
+
+EN_LIS_PROMPT_TEMPLATE = PROMPT_TEMPLATES['en_lis']
+
+
 def load_a3lis_embeddings(
     embedding_dir: Path,
     split: str = 'test',

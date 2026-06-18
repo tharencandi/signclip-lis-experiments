@@ -1,0 +1,162 @@
+# SignCLIP SignIT GlobalNCE fine-tuning configuration for Google Colab
+# Repo location assumed:
+#   /content/signclip-lis-experiments/
+# Checkpoints / tensorboard location example:
+#   /content/drive/MyDrive/signclip_signit_finetune/global_nce
+
+dataset:
+  max_video_len: 256
+  max_len: 64
+  meta_processor: SignCLIPPretrainMetaProcessor
+  video_processor: PoseProcessor
+  text_processor: TextProcessor
+  bert_name: bert-base-cased
+  test_path: /content/signclip-lis-experiments/runs/signclip_signit_finetune/dummy_test.txt
+  val_path: /content/signclip-lis-experiments/runs/signclip_signit_finetune/dummy_val.txt
+  train_path: /content/signclip-lis-experiments/runs/signclip_signit_finetune/dummy_train.txt
+  metadata_path: /content/signclip-lis-experiments/runs/signclip_signit_finetune/dummy_metadata.csv
+  vfeat_dir: /content/signclip-lis-experiments/runs/signclip_signit_finetune
+  aligner: DSAligner
+  pose_components: 'reduced_face'
+  augment_temporal: true
+  use_weighted_sampler: true
+  # Current active regime: v8.1 - balanced ablation (conservative spatial + weighted sampling)
+  aug_sigma_temporal: 0.25
+  aug_sigma_spatial: 0.15
+  aug_sigma_noise: 0.002
+  aug_p_flip: 0.0
+  aug_strength_max: 3.5
+
+  # Saved experiment history for reproducibility.
+  aug_regime_notes:
+    v1:
+      aug_sigma_temporal: 0.2
+      aug_sigma_spatial: 0.2
+      aug_sigma_noise: 0.001
+      aug_p_flip: 0.2
+      aug_strength_max: 3.0
+      note: improved over baseline but still overfit
+    v2:
+      aug_sigma_temporal: 0.3
+      aug_sigma_spatial: 0.3
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.4
+      aug_strength_max: 5.0
+      note: still overfitting. Zero-shot specialist - R@1 15.38%, Linear R@1 13.33%
+    v3:
+      aug_sigma_temporal: 0.5
+      aug_sigma_spatial: 0.5
+      aug_sigma_noise: 0.005
+      aug_p_flip: 0.5
+      aug_strength_max: 8.0
+      note: damaging - too aggressive
+    v4:
+      aug_sigma_temporal: 0.3
+      aug_sigma_spatial: 0.3
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.4
+      aug_strength_max: 5.0
+      weight_decay: 0.05
+      max_epoch: 50
+      note: v2 aug with stronger regularization and shorter training
+      observed_best_epoch: 16
+      observed_best_val_score: 0.3941
+      observed_pattern: validation peaked mid-run, then overfit
+    v4_1:
+      aug_sigma_temporal: 0.3
+      aug_sigma_spatial: 0.3
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.4
+      aug_strength_max: 5.0
+      lr: 3.0e-05
+      warmup_updates: 300
+      weight_decay: 0.08
+      max_epoch: 20
+      note: stronger optimizer regularization on top of v4. 20 epochs underfit. 50 epochs gave zero_shot_r1 10.77%, linear_probe_r1 12.31% - significant improvement over v4_1@20
+    v5:
+      aug_sigma_temporal: 0.3
+      aug_sigma_spatial: 0.3
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.4
+      aug_strength_max: 5.0
+      lr: 5.0e-05
+      warmup_updates: 122
+      weight_decay: 0.02
+      max_epoch: 50
+      no_epoch_checkpoints: false
+      note: transfer-recovery regime (lighter regularization, epoch-wise checkpoint sweep)
+    v6:
+      augment_temporal: false
+      use_weighted_sampler: true
+      aug_sigma_temporal: 0.0
+      aug_sigma_spatial: 0.0
+      aug_sigma_noise: 0.0
+      aug_p_flip: 0.0
+      aug_strength_max: 1.0
+      note: weighted sampling only, no augmentation. Linear probe specialist - R@1 16.92%, but hurts zero-shot (R@1 11.28%)
+    v7:
+      augment_temporal: true
+      use_weighted_sampler: false
+      aug_sigma_temporal: 0.3
+      aug_sigma_spatial: 0.3
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.4
+      aug_strength_max: 5.0
+      note: v2 augmentation with default batch sampling (non-weighted). Best loss checkpoint is new best balanced model. Zero-shot R@1 14.87%, linear R@1 16.41%, beating original (13.85/15.38) on both metrics.
+    v8_strict_spatial:
+      augment_temporal: true
+      use_weighted_sampler: false
+      aug_sigma_temporal: 0.25
+      aug_sigma_spatial: 0.15
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.0
+      aug_strength_max: 3.5
+      note: Conservative spatial augmentation - preserve LIS spatial grammar. Reduce hand cropping, eliminate horizontal flip, keep helpful temporal jitter.
+    v8_1_the_balanced_ablation:
+      augment_temporal: true
+      use_weighted_sampler: true
+      aug_sigma_temporal: 0.25
+      aug_sigma_spatial: 0.15
+      aug_sigma_noise: 0.002
+      aug_p_flip: 0.0
+      aug_strength_max: 3.5
+      note: v8 spatial preservation + weighted sampling from v6 to maximize macro F1. Combines conservative spatial distortion (keep hands visible, no flip) with class-aware sampling to boost discriminability on rarer classes.
+fairseq:
+  common:
+    fp16: true
+    tensorboard_logdir: /content/drive/MyDrive/signclip_signit_finetune/global_nce
+    log_interval: 1000
+  dataset:
+    num_workers: 2
+    batch_size: 16
+  optimization:
+    lr:
+    - 5.0e-05
+    clip_norm: 2.0
+    optimizer: adam
+    adam_betas: (0.9, 0.98)
+    lr_scheduler: polynomial_decay
+    total_num_update: 1000000
+    warmup_updates: 122
+    weight_decay: 0.02
+    ddp_backend: no_c10d
+    max_epoch: 50
+  checkpoint:
+    no_epoch_checkpoints: false
+    reset_optimizer: true
+    reset_dataloader: true
+    reset_meters: true
+    save_dir: /content/drive/MyDrive/signclip_signit_finetune/global_nce
+    restore_file: /content/signclip-lis-experiments/pretrained_models/baseline_temporal_checkpoint_best.pt
+task_type: sweep_small
+model:
+  model_cls: MMFusionSeparate
+  mm_encoder_cls: null
+  video_encoder_cls: MMBertForEncoder
+  text_encoder_cls: BertModel
+  num_hidden_video_layers: 12
+  vfeat_dim: 609
+loss:
+  loss_cls: MMContraLoss
+eval:
+  save_path: /content/drive/MyDrive/signclip_signit_finetune/global_nce

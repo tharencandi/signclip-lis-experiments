@@ -12,9 +12,11 @@ so that fine-tuning and inference see the same input distribution.
 
 import numpy as np
 import random
+import logging
 import torch
 import torch.nn.functional as F
 from pose_format import Pose
+from typing import Optional
 # ---------------------------------------------------------------------------
 # Face mesh contour landmark indices (avoids importing mediapipe at runtime).
 # Generated from: sorted(set(p for tup in mp_holistic.FACEMESH_CONTOURS for p in tup))
@@ -32,6 +34,8 @@ FACEMESH_CONTOURS_POINTS = [
 
 # Maximum sequence length accepted by the model (frames).
 MAX_FRAMES = 256
+
+logger = logging.getLogger(__name__)
 
 
 def pose_normalization_info(pose_header):
@@ -73,7 +77,12 @@ def pose_hide_legs(pose):
     raise ValueError("Unknown pose header schema for hiding legs")
 
 
-def preprocess_pose(pose: Pose, max_frames: int = None, augment: bool = False) -> torch.Tensor:
+def preprocess_pose(
+    pose: Pose,
+    max_frames: Optional[int] = None,
+    augment: bool = False,
+    **augment_kwargs,
+) -> torch.Tensor:
     """Apply the full SignCLIP preprocessing pipeline to a raw Pose object.
 
     Steps (identical to pretraining):
@@ -87,6 +96,9 @@ def preprocess_pose(pose: Pose, max_frames: int = None, augment: bool = False) -
     Args:
         pose:       A pose_format.Pose object.
         max_frames: If provided, truncate sequences longer than this value.
+        augment:    Whether to apply data augmentation.
+        **augment_kwargs: Keyword args forwarded to apply_augmentations(),
+                          e.g. sigma_temporal, p_flip, sigma_spatial, sigma_noise.
 
     Returns:
         Float32 tensor of shape (1, T, 609) — batch dimension included so the
@@ -105,12 +117,13 @@ def preprocess_pose(pose: Pose, max_frames: int = None, augment: bool = False) -
     pose_frames = torch.from_numpy(np.expand_dims(feat, axis=0)).float()  # (1, T, 609)
 
     if augment:
-        pose_frames = apply_augmentations(pose_frames)
+        pose_frames = apply_augmentations(pose_frames, **augment_kwargs)
 
     if max_frames is not None and pose_frames.size(1) > max_frames:
-        print(
-            f"pose sequence length too long ({pose_frames.size(1)}) "
-            f"longer than {max_frames} frames. Truncating"
+        logger.debug(
+            "pose sequence length too long (%s) longer than %s frames. Truncating",
+            pose_frames.size(1),
+            max_frames,
         )
         pose_frames = pose_frames[:, :max_frames, :]
 

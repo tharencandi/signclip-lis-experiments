@@ -22,6 +22,12 @@ except ImportError:
     pass
 
 try:
+    from .signit_finetune import *
+    from .signit_prolip_finetune import *
+except ImportError:
+    pass
+
+try:
     from .a3lis_dhn_finetune import *
 except ImportError:
     pass
