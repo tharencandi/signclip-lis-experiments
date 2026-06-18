@@ -164,6 +164,9 @@ def explore(
     words, vocab_embs = load_or_build_vocab_embeddings(
         cache_dir, model_name, checkpoint_path, prompt_template, vocab_batch_size, vocab_csv
     )
+    if top_k <= 0:
+        raise ValueError(f"--top_k must be >= 1 (got {top_k})")
+    top_k = min(top_k, len(words))
     vocab_embs = vocab_embs.astype(np.float32)
     pose_embs = pose_embs.astype(np.float32)
 
