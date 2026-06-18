@@ -46,6 +46,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from demo_sign import embed_pose
+from signclip.utils.pose_utils import MAX_FRAMES as MAX_FRAMES_DEFAULT
 
 
 def load_and_normalise_pose(pose_path: Path, normalize: bool = False,
@@ -237,6 +238,7 @@ def precompute_normalised_embeddings(
     skip_count = 0
     error_count = 0
     metadata_list = []
+    truncation_log = []
     
     for item in tqdm(pose_items, desc="Processing poses"):
         pose_file = Path(item['file_path'])
@@ -255,6 +257,19 @@ def precompute_normalised_embeddings(
         if pose is None:
             error_count += 1
             continue
+
+        frame_count = int(pose.body.data.shape[0])
+        if frame_count > MAX_FRAMES_DEFAULT:
+            truncation_log.append({
+                'file_path': str(pose_file),
+                'embedding_file': output_name,
+                'original_frames': frame_count,
+                'max_frames': MAX_FRAMES_DEFAULT,
+                'truncated_frames': frame_count - MAX_FRAMES_DEFAULT,
+                'signer': item.get('signer', 'unknown'),
+                'label_italian': item.get('label_italian', ''),
+                'split': item.get('split', 'unknown'),
+            })
         
         try:
             # Compute embedding from pose
@@ -284,6 +299,16 @@ def precompute_normalised_embeddings(
             print(f"\nError computing embedding for {pose_file.name}: {e}")
             error_count += 1
             continue
+
+    truncation_log_file = output_path / 'truncated_frames.json'
+    with open(truncation_log_file, 'w', encoding='utf-8') as f:
+        json.dump({
+            'max_frames': MAX_FRAMES_DEFAULT,
+            'truncated_count': len(truncation_log),
+            'entries': truncation_log,
+        }, f, indent=2, ensure_ascii=False)
+    print(f"\nTruncation log saved to {truncation_log_file}")
+    print(f"  Truncated pose files in this run: {len(truncation_log)}")
     
     # Save metadata
     if metadata_list:

@@ -14,8 +14,10 @@ _PACKAGE_DIR = Path(__file__).parent.parent.resolve()
 
 # --- CONFIG (absolute paths to dataset files) ---
 DATASET_PATH = (_PACKAGE_DIR / "a3lis_poses").resolve()
-CSV_PATH = (_PACKAGE_DIR / "sign_dictionary.csv").resolve()
-CSV_WITH_CATEGORIES_PATH = (_PACKAGE_DIR / "sign_dictionary_fitted.csv").resolve()
+CSV_PATH = (_PACKAGE_DIR / "sign_dictionary_fixed.csv").resolve()
+CSV_WITH_CATEGORIES_PATH = (_PACKAGE_DIR / "sign_dictionary_fixed.csv").resolve()
+CSV_PATH_FALLBACK = (_PACKAGE_DIR / "sign_dictionary.csv").resolve()
+CSV_WITH_CATEGORIES_PATH_FALLBACK = (_PACKAGE_DIR / "sign_dictionary_fitted.csv").resolve()
 SPLIT_CONFIG_PATH = (_PACKAGE_DIR / "train_test_val_split.json").resolve()
 # ------------------------------------------------
 
@@ -47,8 +49,17 @@ def load_dictionary(use_categories=True):
     if use_categories and CSV_WITH_CATEGORIES_PATH.exists():
         csv_file = CSV_WITH_CATEGORIES_PATH
         has_categories = True
+    elif use_categories and CSV_WITH_CATEGORIES_PATH_FALLBACK.exists():
+        csv_file = CSV_WITH_CATEGORIES_PATH_FALLBACK
+        has_categories = True
+    elif CSV_PATH.exists():
+        csv_file = CSV_PATH
+    elif CSV_PATH_FALLBACK.exists():
+        csv_file = CSV_PATH_FALLBACK
     elif not CSV_PATH.exists():
-        raise FileNotFoundError(f"Could not find {CSV_PATH}!")
+        raise FileNotFoundError(
+            f"Could not find dictionary CSVs: {CSV_PATH} or {CSV_PATH_FALLBACK}!"
+        )
     
     df = pd.read_csv(csv_file)
     

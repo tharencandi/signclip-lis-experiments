@@ -175,9 +175,20 @@ def create_class_eval_plots(output_dir, split, prompt_name, label_str, class_met
         )
         neighborhood_to_median_ranks[neighborhood].append(cls_data['median_rank'])
 
-    violin_data = [neighborhood_to_median_ranks[name] for name in neighborhood_order]
+    violin_items = [
+        (name, neighborhood_to_median_ranks[name])
+        for name in neighborhood_order
+        if len(neighborhood_to_median_ranks[name]) > 0
+    ]
 
-    fig, ax = plt.subplots(figsize=(11, 6))
+    if not violin_items:
+        print("No class-level median-rank data available for violin plot; skipping tier visualization.")
+        return saved_paths
+
+    violin_labels = [name for name, _ in violin_items]
+    violin_data = [values for _, values in violin_items]
+
+    fig, ax = plt.subplots(figsize=(max(11, 3 * len(violin_data)), 6))
     vp = ax.violinplot(violin_data, showmeans=True, showmedians=True, widths=0.8)
 
     # Keep line styling explicit; body styling is left default for compatibility.
@@ -190,8 +201,8 @@ def create_class_eval_plots(output_dir, split, prompt_name, label_str, class_met
     ax.set_title('Median Rank Distribution by Retrieval Neighborhood')
     ax.set_xlabel('Class Neighborhood')
     ax.set_ylabel('Median Rank')
-    ax.set_xticks([1, 2, 3])
-    ax.set_xticklabels(neighborhood_order, rotation=8)
+    ax.set_xticks(range(1, len(violin_labels) + 1))
+    ax.set_xticklabels(violin_labels, rotation=8)
     ax.grid(axis='y', alpha=0.25)
 
     violin_file = output_dir / f"{file_stem}_median_rank_tiers_violin.png"
