@@ -2,6 +2,8 @@
 
 Evaluation of [SignCLIP](https://arxiv.org/abs/2407.10925) on Italian Sign Language (LIS) across zero-shot, few-shot, and fine-tuning paradigms. Datasets: **A3LIS-147** (balanced, lab-recorded) and **SignIT** (naturalistic, long-tailed). Adapted from the original MMPT/fairseq implementation with fairseq dependencies removed.
 
+repo based on J22Melody/fairseq
+
 ## Structure
 
 ```
